@@ -105,6 +105,9 @@ class CalculatorSuite extends FunSuite with ShouldMatchers {
     val rs2 = Calculator.computeValues(ciclyc1)
     assert(rs2("a")().equals(Double.NaN))
     assert(rs2("e")().equals(Double.NaN))
+    assert(rs2("b")().equals(Double.NaN))
+    assert(rs2("c")().equals(Double.NaN))
+    assert(rs2("d")() == 8)
 
   }
 
