@@ -12,9 +12,11 @@ import TweetLength.MaxTweetLength
 @RunWith(classOf[JUnitRunner])
 class CalculatorSuite extends FunSuite with ShouldMatchers {
 
-  /******************
-   ** TWEET LENGTH **
-   ******************/
+  /**
+   * ****************
+   * * TWEET LENGTH **
+   * ****************
+   */
 
   def tweetLength(text: String): Int =
     text.codePointCount(0, text.length)
@@ -33,7 +35,6 @@ class CalculatorSuite extends FunSuite with ShouldMatchers {
     assert(result() == MaxTweetLength - tweetLength("foo blabla \uD83D\uDCA9 bar"))
   }
 
-
   test("colorForRemainingCharsCount with a constant signal") {
     val resultGreen1 = TweetLength.colorForRemainingCharsCount(Var(52))
     assert(resultGreen1() == "green")
@@ -49,6 +50,39 @@ class CalculatorSuite extends FunSuite with ShouldMatchers {
     assert(resultRed1() == "red")
     val resultRed2 = TweetLength.colorForRemainingCharsCount(Var(-5))
     assert(resultRed2() == "red")
+  }
+
+
+  test("Calculator computing capability") {
+    val origin = Map[String, Signal[Expr]](
+      "a" -> Signal(Plus(Ref("e"), Literal(2))),
+      "b" -> Signal(Plus(Ref("a"), Literal(2))),
+      "c" -> Signal(Plus(Ref("a"), Ref("b"))),
+      "d" -> Signal(Times(Literal(2), Literal(4))),
+      "e" -> Signal(Times(Literal(2), Literal(4))))
+
+    val rs = Calculator.computeValues(origin)
+
+    assert(rs("a")() == 10)
+    assert(rs("b")() == 12)
+    assert(rs("c")() == 22)
+    assert(rs("d")() == 8)
+    assert(rs("e")() == 8)
+
+    val ciclyc1 = Map[String, Signal[Expr]](
+      "a" -> Signal(Plus(Ref("e"), Literal(2))),
+      "b" -> Signal(Plus(Ref("a"), Literal(2))),
+      "c" -> Signal(Plus(Ref("a"), Ref("b"))),
+      "d" -> Signal(Times(Literal(2), Literal(4))),
+      "e" -> Signal(Times(Ref("a"), Literal(4))))
+
+    val rs2 = Calculator.computeValues(ciclyc1)
+    assert(rs2("a")().equals(Double.NaN))
+    assert(rs2("e")().equals(Double.NaN))
+    assert(rs2("b")().equals(Double.NaN))
+    assert(rs2("c")().equals(Double.NaN))
+    assert(rs2("d")() == 8)
+
   }
 
 }
