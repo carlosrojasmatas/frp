@@ -35,7 +35,9 @@ trait NodeScala {
 
     try {
         while (token.nonCancelled && response.hasNext) {
-          exchange.write(response.next())
+          val next= response.next
+          println("Serving chunk " + next)
+          exchange.write(next)
         }
     } finally {
       exchange.close()

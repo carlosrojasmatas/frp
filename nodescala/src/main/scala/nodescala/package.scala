@@ -72,7 +72,11 @@ package object nodescala {
      * Returns a future with a unit value that is completed after time `t`.
      */
     def delay(t: Duration): Future[Unit] = {
-      Future.delay(t)
+      Future {
+        blocking {
+          Thread.sleep(t toMillis)
+        }
+      }
     }
 
     /**
@@ -128,9 +132,9 @@ package object nodescala {
     def continueWith[S](cont: Future[T] => S): Future[S] = {
 
       val p = Promise[S]()
-      f.onComplete { x =>
-        p.completeWith(
-          async(cont(f)))
+      f.onComplete { 
+        
+        x => p complete Try(cont(f))
       }
 
       p.future
@@ -148,7 +152,7 @@ package object nodescala {
       val p = Promise[S]()
 
       f.onComplete {
-        x => cont(x)
+        x => p.complete(Try(cont(x)))
       }
 
       p.future
