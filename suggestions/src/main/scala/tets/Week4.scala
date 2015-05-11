@@ -56,21 +56,33 @@ object Week4 {
 
     //    val cnn = PublishSubject[Int]()
     //    val cnn = ReplaySubject[Int]()
-    val cnn = AsyncSubject[Int]()
-    val a = cnn.subscribe(x => println(s"a:$x"))
-    val b = cnn.subscribe(x => println(s"b:$x"))
-
-    cnn.onNext(42)
-
-    a.unsubscribe()
-    cnn.onNext(17)
-
-    //    cnn.onCompleted()
-
-    val c = cnn.subscribe(x => println(s"c:$x"))
-
-    cnn.onNext(8)
-    Thread.sleep(3000)
-
+//    val cnn = AsyncSubject[Int]()
+//    val a = cnn.subscribe(x => println(s"a:$x"))
+//    val b = cnn.subscribe(x => println(s"b:$x"))
+//
+//    cnn.onNext(42)
+//
+//    a.unsubscribe()
+//    cnn.onNext(17)
+//
+//    //    cnn.onCompleted()
+//
+//    val c = cnn.subscribe(x => println(s"c:$x"))
+//
+//    cnn.onNext(8)
+//    Thread.sleep(3000)
+    val s = System.currentTimeMillis()
+    val x  = Observable[String](obs => {
+     while(true){
+       Thread.sleep(1000)       
+    	 obs.onNext("a")
+     } 
+     Subscription("It's done") 
+    }).takeWhile { x => (System.currentTimeMillis() - s < 10000) }.doOnCompleted(println("completed"))
+    
+    
+    val subs = x.subscribe(println(_))
+    readLine()
+    
   }
 }  

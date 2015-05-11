@@ -12,6 +12,7 @@ import rx.subscriptions.CompositeSubscription
 import rx.lang.scala.Observable
 import observablex._
 import search._
+import rx.lang.scala.subjects.PublishSubject
 
 trait WikipediaApi {
 
@@ -48,7 +49,9 @@ trait WikipediaApi {
      *
      * E.g. `1, 2, 3, !Exception!` should become `Success(1), Success(2), Success(3), Failure(Exception), !TerminateStream!`
      */
-    def recovered: Observable[Try[T]] = ???
+    def recovered: Observable[Try[T]] = {
+      obs.map {s => Success(s)}.onErrorReturn { x => Failure(x) }
+    }
 
     /** Emits the events from the `obs` observable, until `totalSec` seconds have elapsed.
      *
@@ -56,9 +59,12 @@ trait WikipediaApi {
      *
      * Note: uses the existing combinators on observables.
      */
-    def timedOut(totalSec: Long): Observable[T] = ???
+    def timedOut(totalSec: Long): Observable[T] = {
+      val s = System.currentTimeMillis()
+    	obs.takeWhile { x => (System.currentTimeMillis() - s) <= totalSec }
+    }
 
-    /** Given a stream of events `obs` and a method `requestMethod` to map a request `T` into
+    /** Given a stream of events `obs` and a method. `requestMethod` to map a request `T` into
      * a stream of responses `S`, returns a stream of all the responses wrapped into a `Try`.
      * The elements of the response stream should reflect the order of their corresponding events in `obs`.
      *
@@ -78,12 +84,14 @@ trait WikipediaApi {
      * Similarly:
      *
      * Observable(1, 2, 3).concatRecovered(num => Observable(num, num, num))
-     *
+     y
      * should return:
      *
      * Observable(Success(1), Succeess(1), Succeess(1), Succeess(2), Succeess(2), Succeess(2), Succeess(3), Succeess(3), Succeess(3))
      */
-    def concatRecovered[S](requestMethod: T => Observable[S]): Observable[Try[S]] = ???
+    def concatRecovered[S](requestMethod: T => Observable[S]): Observable[Try[S]] = {
+      obs.flatMap { o => requestMethod(o).map { s => Try(s) } }
+    }
 
   }
 

@@ -58,6 +58,9 @@ class WikipediaApiTest extends FunSuite {
       () => completed = true)
     assert(completed && count == 3, "completed: " + completed + ", event count: " + count)
   }
+  
+  
+  
   test("WikipediaApi should correctly use concatRecovered") {
     val requests = Observable.just(1, 2, 3)
     val remoteComputation = (n: Int) => Observable.just(0 to n: _*)
