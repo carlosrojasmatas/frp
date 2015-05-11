@@ -60,8 +60,8 @@ trait WikipediaApi {
      * Note: uses the existing combinators on observables.
      */
     def timedOut(totalSec: Long): Observable[T] = {
-      val s = System.currentTimeMillis()
-    	obs.takeWhile { x => (System.currentTimeMillis() - s) <= totalSec }
+    	obs.take(totalSec seconds)
+      //finallyDo
     }
 
     /** Given a stream of events `obs` and a method. `requestMethod` to map a request `T` into
@@ -90,7 +90,7 @@ trait WikipediaApi {
      * Observable(Success(1), Succeess(1), Succeess(1), Succeess(2), Succeess(2), Succeess(2), Succeess(3), Succeess(3), Succeess(3))
      */
     def concatRecovered[S](requestMethod: T => Observable[S]): Observable[Try[S]] = {
-      obs.flatMap { o => requestMethod(o).map { s => Try(s) } }
+      obs.flatMap { o => requestMethod(o).map { s => Success(s) }.onErrorReturn { x => Failure(x) } }
     }
 
   }

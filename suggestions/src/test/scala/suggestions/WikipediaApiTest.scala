@@ -37,7 +37,7 @@ class WikipediaApiTest extends FunSuite {
     val sub = obs subscribe {
       observed += _
     }
-    
+
     assert(observed == Seq("hello_world", "without_white_spaces"), observed)
 
   }
@@ -58,9 +58,7 @@ class WikipediaApiTest extends FunSuite {
       () => completed = true)
     assert(completed && count == 3, "completed: " + completed + ", event count: " + count)
   }
-  
-  
-  
+
   test("WikipediaApi should correctly use concatRecovered") {
     val requests = Observable.just(1, 2, 3)
     val remoteComputation = (n: Int) => Observable.just(0 to n: _*)
@@ -76,6 +74,24 @@ class WikipediaApiTest extends FunSuite {
       s => total = s
     }
     assert(total == (1 + 1 + 2 + 1 + 2 + 3), s"Sum: $total")
+  }
+
+//  test("WikipediaApi should correctly use concatRecovered with errors") {
+//    val requests = Observable.just(1, 2, 3, 4, 5)
+//
+//    val rs = requests.concatRecovered(n => if (n != 4) Observable.just(n) else Observable.error(new Error)).toBlocking.toList
+//    assert(rs.toSeq === Seq(Success(1), Success(2), Success(3), Failure(new Error), Success(5)),rs)
+//  }
+
+  test("Observable(1, 2, 3).zip(Observable.interval(700 millis)).timedOut(1L) should return the first value, and complete without errors") {
+    import scala.concurrent.duration.Duration._
+    val o = Observable.just(1, 2, 3).zip(Observable.interval(700 millis)).timedOut(1L)
+    var rs = List[Int]()
+
+    val s = o.subscribe(
+      n => rs = n._1 :: rs)
+    Thread.sleep(1500)
+    assert(rs.size == 1)
   }
 
 }
