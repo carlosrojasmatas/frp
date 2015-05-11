@@ -18,7 +18,7 @@ trait Mathematics {
 }
 object Week4 {
 
-  def main(args: Array[String]): Unit = {
+//  def main(args: Array[String]): Unit = {
     //    val s = Subscription {
     //      println("bye, bye")
     //    }
@@ -71,18 +71,18 @@ object Week4 {
 //
 //    cnn.onNext(8)
 //    Thread.sleep(3000)
-    val s = System.currentTimeMillis()
-    val x  = Observable[String](obs => {
-     while(true){
-       Thread.sleep(1000)       
-    	 obs.onNext("a")
-     } 
-     Subscription("It's done") 
-    }).takeWhile { x => (System.currentTimeMillis() - s < 10000) }.doOnCompleted(println("completed"))
-    
-    
-    val subs = x.subscribe(println(_))
-    readLine()
-    
-  }
+//    val s = System.currentTimeMillis()
+//    val x  = Observable[String](obs => {
+//     while(true){
+//       Thread.sleep(1000)       
+//    	 obs.onNext("a")
+//     } 
+//     Subscription("It's done") 
+//    }).takeWhile { x => (System.currentTimeMillis() - s < 10000) }.doOnCompleted(println("completed"))
+//    
+//    
+//    val subs = x.subscribe(println(_))
+//    readLine()
+//    
+//  }
 }  

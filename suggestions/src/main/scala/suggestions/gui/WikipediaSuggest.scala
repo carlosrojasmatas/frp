@@ -16,6 +16,7 @@ import rx.lang.scala.Observable
 import rx.lang.scala.Subscription
 import observablex._
 import search._
+import scala.util.Failure
 
 object WikipediaSuggest extends SimpleSwingApplication with ConcreteSwingApi with ConcreteWikipediaApi {
 
@@ -81,25 +82,45 @@ object WikipediaSuggest extends SimpleSwingApplication with ConcreteSwingApi wit
      */
 
     // TO IMPLEMENT
-    val searchTerms: Observable[String] = ???
+    val searchTerms: Observable[String] =searchTermField.textValues
 
     // TO IMPLEMENT
-    val suggestions: Observable[Try[List[String]]] = ???
-
+    val suggestions: Observable[Try[List[String]]] = {
+      searchTerms.sanitized.concatRecovered (t => Observable.from(wikipediaSuggestion(t)))
+    } 
     // TO IMPLEMENT
     val suggestionSubscription: Subscription =  suggestions.observeOn(eventScheduler) subscribe {
-      x => ???
+      x => x match {
+        case Success(list) => {
+          suggestionList.listData_=(Nil)
+        	suggestionList.listData_=(list)
+          suggestionList.selectIndices(0)
+        }
+        case Failure(t) => status.text_=(t.toString())
+      }
     }
 
     // TO IMPLEMENT
-    val selections: Observable[String] = ???
+    val selections: Observable[String] ={
+    		button.clicks.filter(b => !suggestionList.listData.isEmpty).map { b => suggestionList.selection.items(0) }
+    } 
+      
 
     // TO IMPLEMENT
-    val pages: Observable[Try[String]] = ???
+    val pages: Observable[Try[String]] = selections.concatRecovered (p => Observable.from(wikipediaPage(p)))
 
     // TO IMPLEMENT
     val pageSubscription: Subscription = pages.observeOn(eventScheduler) subscribe {
-      x => ???
+      x => x match {
+        case Success(p) => {
+          editorpane.contentType_=("text/html")          
+        	editorpane.text_=(p)
+        }
+        case Failure(t) => {
+        	editorpane.text_=("")
+        	status.text_=(t.toString)
+        }
+      }
     }
 
   }
