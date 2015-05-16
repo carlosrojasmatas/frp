@@ -24,7 +24,7 @@ class BinaryTreeSuite(_system: ActorSystem) extends TestKit(_system) with FunSui
       val repliesUnsorted = for (i <- 1 to ops.size) yield try {
         requester.expectMsgType[OperationReply]
       } catch {
-        case ex: Throwable if ops.size > 1000 => fail(s"failure to receive confirmation $i/${ops.size}", ex)
+        case ex: Throwable if ops.size > 100 => fail(s"failure to receive confirmation $i/${ops.size}", ex)
         case ex: Throwable =>
           fail(s"failure to receive confirmation $i/${ops.size}\nRequests:" +
             ops.mkString("\n    ", "\n     ", ""), ex)
@@ -156,7 +156,7 @@ class BinaryTreeSuite(_system: ActorSystem) extends TestKit(_system) with FunSui
 
     val requester = TestProbe()
     val topNode = system.actorOf(Props[BinaryTreeSet])
-    val count = 100
+    val count = 1000
 
     val ops = randomOperations(requester.ref, count)
     val expectedReplies = referenceReplies(ops)

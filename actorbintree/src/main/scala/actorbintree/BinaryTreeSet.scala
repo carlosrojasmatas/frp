@@ -74,8 +74,8 @@ class BinaryTreeSet extends Actor {
     case ops: Operation => root ! ops
     case GC => {
       val newRoot = createRoot
-      root ! CopyTo(newRoot)
       context.become(garbageCollecting(newRoot))
+      root ! CopyTo(newRoot)
     }
   }
 
@@ -86,15 +86,15 @@ class BinaryTreeSet extends Actor {
    * all non-removed elements into.
    */
   def garbageCollecting(newRoot: ActorRef): Receive = {
-
-    case o: Operation => pendingQueue enqueue o
-
     case CopyFinished => {
       root ! PoisonPill
       root = newRoot
       pendingQueue foreach (root ! _)
+      pendingQueue = Queue.empty[Operation]
       context.become(normal)
     }
+    case o: Operation => pendingQueue = pendingQueue enqueue o
+    case GC           =>
   }
 
 }
@@ -124,114 +124,231 @@ class BinaryTreeNode(val elem: Int, initiallyRemoved: Boolean) extends Actor {
   // optional
   /** Handles `Operation` messages and `CopyTo` requests. */
   val normal: Receive = LoggingReceive {
-
-    case con: Contains if con.elem == elem => con.requester ! ContainsResult(con.id, !removed)
-    case con: Contains if subtrees.isEmpty => con.requester ! ContainsResult(con.id, false)
+    //
     case con: Contains => {
+      if (con.elem == elem) {
+        con.requester ! ContainsResult(con.id, !removed)
+      } else {
 
-      val r = subtrees.get(Right)
-      val l = subtrees.get(Left)
-
-      if (con.elem > elem) {
-        r match {
-          case Some(ref) => ref forward con
-          case None => {
-            con.requester ! ContainsResult(con.id, false)
+        if (con.elem > elem) {
+          subtrees.get(Right) match {
+            case Some(ref) => ref forward con
+            case None => {
+              con.requester ! ContainsResult(con.id, false)
+            }
           }
-        }
 
-      } else
-        l match {
-          case Some(ref) => ref forward con
-          case None => {
-            con.requester ! ContainsResult(con.id, false)
+        } else
+          subtrees.get(Left) match {
+            case Some(ref) => ref forward con
+            case None => {
+              con.requester ! ContainsResult(con.id, false)
+            }
           }
-        }
-    }
-
-    //insert handlers
-    case in: Insert if subtrees.isEmpty => {
-      if (in.elem == elem && removed) {
-        removed = false
       }
-      val ref = context.actorOf(props(in.elem, false))
-      if (in.elem > elem) subtrees += Right -> ref
-      else subtrees += Left -> ref
-      in.requester ! OperationFinished(in.id)
     }
+    //    case Contains(requester, id, value) => {
+    //      if (value == elem) {
+    //        requester ! ContainsResult(id, !removed)
+    //      } else {
+    //        if (value < elem) {
+    //          subtrees get (Left) match {
+    //            case Some(left) => {
+    //              left ! Contains(requester, id, value)
+    //            }
+    //
+    //            case None => {
+    //              requester ! ContainsResult(id, false)
+    //            }
+    //          }
+    //        }
+    //
+    //        if (value > elem) {
+    //          subtrees get (Right) match {
+    //            case Some(right) => {
+    //              right ! Contains(requester, id, value)
+    //            }
+    //
+    //            case None => {
+    //              requester ! ContainsResult(id, false)
+    //            }
+    //          }
+    //        }
+    //      }
+    //    }
+
+    //        case in:Insert if in.elem == elem && removed => 
+    //          removed = false
+    //          in.requester ! OperationFinished(in.id)
+
     case in: Insert => {
-      if (in.elem == elem && removed) {
-        removed = false
-      }
-      val r = subtrees.get(Right)
-      val l = subtrees.get(Left)
-
       if (in.elem > elem) {
-        r match {
-          case Some(ref) => ref forward in
+        subtrees.get(Right) match {
+          case Some(ref) => ref ! in
           case None => {
             subtrees += Right -> context.actorOf(props(in.elem, false))
             in.requester ! OperationFinished(in.id)
           }
         }
 
-      } else
-        l match {
-          case Some(ref) => ref forward in
+      } else if (in.elem < elem)
+        subtrees.get(Left) match {
+          case Some(ref) => ref ! in
           case None => {
             subtrees += Left -> context.actorOf(props(in.elem, false))
             in.requester ! OperationFinished(in.id)
 
           }
         }
-    }
+      else {
 
-    //remove handlers
-    case rem: Remove if rem.elem == elem => {
-      removed = true
-      rem.requester ! OperationFinished(rem.id)
-    }
-    case rem: Remove if subtrees.isEmpty => rem.requester ! OperationFinished(rem.id)
-    case rem: Remove => {
-
-      val r = subtrees.get(Right)
-      val l = subtrees.get(Left)
-
-      if (rem.elem > elem) {
-        r match {
-          case Some(ref) => ref forward rem
-          case None => {
-            rem.requester ! OperationFinished(rem.id)
-          }
+        if (removed) {
+          removed = false
         }
 
-      } else
-        l match {
-          case Some(ref) => ref forward rem
-          case None => {
-            rem.requester ! OperationFinished(rem.id)
-          }
-        }
-
-    }
-
-    case ct: CopyTo => {
-
-      val expected = subtrees.values.filter(_ != None).toSet
-      println(s"Expected values ${expected.size}")
-
-      if (expected.isEmpty && removed) sender ! CopyFinished
-
-      else if (!expected.isEmpty && removed) {
-        context.become(copying(expected, true))
-        expected.foreach(_ forward ct)
-
-      } else if (expected.isEmpty && !removed) {
-        context.become(copying(expected, false))
-        ct.treeNode ! Insert(self, elem, Integer.MAX_VALUE)
+        in.requester ! OperationFinished(in.id)
       }
-
     }
+
+    //    case Insert(requester, id, value) => {
+    //      if (value < elem && subtrees.contains(Left)) {
+    //        subtrees.get(Left) match {
+    //          case Some(left) => {
+    //            left ! Insert(requester, id, value)
+    //          }
+    //
+    //          case None =>
+    //        }
+    //      }
+    //
+    //      if (value > elem && subtrees.contains(Right)) {
+    //        subtrees.get(Right) match {
+    //          case Some(right) => {
+    //            right ! Insert(requester, id, value)
+    //          }
+    //
+    //          case None =>
+    //        }
+    //      }
+    //
+    //      if (value < elem && !subtrees.contains(Left)) {
+    //        subtrees += Left -> context.actorOf(BinaryTreeNode.props(value, false))
+    //        requester ! OperationFinished(id)
+    //      }
+    //
+    //      if (value > elem && !subtrees.contains(Right)) {
+    //        subtrees += Right -> context.actorOf(BinaryTreeNode.props(value, false))
+    //        requester ! OperationFinished(id)
+    //      }
+    //
+    //      if (value == elem) {
+    //        if (removed) {
+    //          removed = false
+    //        }
+    //
+    //        requester ! OperationFinished(id)
+    //      }
+    //    }
+
+    //remove handler
+
+    case rem: Remove => {
+      if (rem.elem > elem) {
+        subtrees.get(Right) match {
+          case Some(ref) => ref forward rem
+          case None => {
+            rem.requester ! OperationFinished(rem.id)
+          }
+        }
+
+      } else if (rem.elem < elem) {
+        subtrees.get(Left) match {
+          case Some(ref) => ref forward rem
+          case None => {
+            rem.requester ! OperationFinished(rem.id)
+          }
+        }
+      } else {
+        removed = true
+        rem.requester ! OperationFinished(rem.id)
+      }
+    }
+
+    //    case Remove(requester, id, value) => {
+    //      if (value == elem) {
+    //        removed = true
+    //        requester ! OperationFinished(id)
+    //      } else {
+    //        if (value < elem) {
+    //          subtrees get (Left) match {
+    //            case Some(left) => {
+    //              left ! Remove(requester, id, value)
+    //            }
+    //
+    //            case None => {
+    //              requester ! OperationFinished(id)
+    //            }
+    //          }
+    //        }
+    //
+    //        if (value > elem) {
+    //          subtrees get (Right) match {
+    //            case Some(right) => {
+    //              right ! Remove(requester, id, value)
+    //            }
+    //
+    //            case None => {
+    //              requester ! OperationFinished(id)
+    //            }
+    //          }
+    //        }
+    //      }
+    //    }
+
+        case ct: CopyTo => {
+    
+          val expected = subtrees.map{case (k,v)=> v}.toSet
+    
+          if (expected.isEmpty && removed) sender ! CopyFinished //empty leaf
+          else{
+        	  context.become(copying(expected, removed))
+        	  expected.foreach(_ ! ct)
+            if(!removed) ct.treeNode ! Insert(self, -1,elem)
+          }
+    
+        }
+
+//    case CopyTo(newRoot) => {
+//      var expected = Set[ActorRef]()
+//
+//      subtrees get (Left) match {
+//        case Some(left) => {
+//          expected = expected + left
+//        }
+//
+//        case None =>
+//      }
+//
+//      subtrees get (Right) match {
+//        case Some(right) => {
+//          expected = expected + right
+//        }
+//
+//        case None =>
+//      }
+//
+//      if (expected.isEmpty && removed) {
+//        context.parent ! CopyFinished
+//      } else {
+//        context.become(copying(expected, removed))
+//        expected foreach (_ ! CopyTo(newRoot))
+//
+//        if (!removed) {
+//          newRoot ! Insert(self, -1, elem)
+//        }
+//      }
+//    }
+
   }
 
   // optional
@@ -243,34 +360,35 @@ class BinaryTreeNode(val elem: Int, initiallyRemoved: Boolean) extends Actor {
 
     case of: OperationFinished => {
       if (expected.isEmpty) {
-        context.parent ! CopyFinished
         context.become(normal)
+        context.parent ! CopyFinished
       } else {
         context.become(copying(expected, true))
       }
     }
 
     case CopyFinished => {
-      if (insertConfirmed) {
-        context.parent ! CopyFinished
-        context.become(normal)
-      } else context.become(copying(expected - sender, insertConfirmed))
+
+      if (expected.isEmpty) {
+        if (insertConfirmed) {
+          context.become(normal)
+          context.parent ! CopyFinished
+        }
+      } else {
+        val next = expected - expected.head
+        if (next.isEmpty) { //no more waiting
+          if (insertConfirmed) { // I'm done
+            context.become(normal)
+            context.parent ! CopyFinished
+          } else {
+            context.become(copying(next, insertConfirmed))
+          }
+        } else {
+          context.become(copying(next, insertConfirmed))
+        }
+      }
     }
 
-    //    case of: OperationFinished if expected.isEmpty =>
-    //      context.parent ! CopyFinished
-    //      context.become(normal)
-    //
-    //    case OperationFinished =>
-    //      context.become(copying(expected, true))
-    //
-    //    case CopyFinished if insertConfirmed =>
-    //      context.parent ! CopyFinished
-    //      context.become(normal)
-    //
-    //    case CopyFinished => {
-    //      context.become(copying(expected - sender, insertConfirmed))
-    //    }
   }
 
 }
