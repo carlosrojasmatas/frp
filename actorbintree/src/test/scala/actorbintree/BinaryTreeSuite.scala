@@ -11,8 +11,7 @@ import scala.util.Random
 import scala.concurrent.duration._
 import org.scalatest.FunSuiteLike
 
-class BinaryTreeSuite(_system: ActorSystem) extends TestKit(_system) with FunSuiteLike with Matchers with BeforeAndAfterAll with ImplicitSender
-{
+class BinaryTreeSuite(_system: ActorSystem) extends TestKit(_system) with FunSuiteLike with Matchers with BeforeAndAfterAll with ImplicitSender {
 
   def this() = this(ActorSystem("BinaryTreeSuite"))
 
@@ -25,13 +24,17 @@ class BinaryTreeSuite(_system: ActorSystem) extends TestKit(_system) with FunSui
       val repliesUnsorted = for (i <- 1 to ops.size) yield try {
         requester.expectMsgType[OperationReply]
       } catch {
-        case ex: Throwable if ops.size > 10 => fail(s"failure to receive confirmation $i/${ops.size}", ex)
-        case ex: Throwable                  => fail(s"failure to receive confirmation $i/${ops.size}\nRequests:" + ops.mkString("\n    ", "\n     ", ""), ex)
+        case ex: Throwable if ops.size > 1000 => fail(s"failure to receive confirmation $i/${ops.size}", ex)
+        case ex: Throwable =>
+          fail(s"failure to receive confirmation $i/${ops.size}\nRequests:" +
+            ops.mkString("\n    ", "\n     ", ""), ex)
       }
       val replies = repliesUnsorted.sortBy(_.id)
       if (replies != expectedReplies) {
         val pairs = (replies zip expectedReplies).zipWithIndex filter (x => x._1._1 != x._1._2)
-        fail("unexpected replies:" + pairs.map(x => s"at index ${x._2}: got ${x._1._1}, expected ${x._1._2}").mkString("\n    ", "\n    ", ""))
+        fail("unexpected replies:" + pairs.map(x => s"at index ${x._2}: got ${x._1._1}, expected ${x._1._2}").mkString("\n    ", "\n    ", "")
+          + "\nRequests:" +
+          ops.mkString("\n    ", "\n     ", ""))
       }
     }
 
@@ -41,7 +44,6 @@ class BinaryTreeSuite(_system: ActorSystem) extends TestKit(_system) with FunSui
     ops foreach { op =>
       topNode ! op
     }
-
     receiveN(probe, ops, expected)
     // the grader also verifies that enough actors are created
   }
@@ -59,26 +61,65 @@ class BinaryTreeSuite(_system: ActorSystem) extends TestKit(_system) with FunSui
     expectMsg(ContainsResult(3, true))
   }
 
+  test("instruction example 2") {
+    val topNode = system.actorOf(Props[BinaryTreeSet])
+
+    val requester = TestProbe()
+    val requesterRef = requester.ref
+
+    topNode ! Insert(requesterRef, id = 10, 5)
+    topNode ! Insert(requesterRef, id = 20, 4)
+    topNode ! Insert(requesterRef, id = 30, 8)
+    topNode ! Insert(requesterRef, id = 40, 41)
+    topNode ! Insert(requesterRef, id = 50, 2)
+
+    topNode ! GC
+    
+    topNode ! Insert(requesterRef, id = 60, 43)
+    topNode ! Insert(requesterRef, id = 70, 22)
+    
+    requester.within(5 seconds){
+      for (i <- 1 to 7) {
+        requester.expectMsgType[OperationReply]
+      }
+    }
+
+//    Thread.sleep(1000000)
+    //      val ops = List(
+    //        Insert(requesterRef, id = 10, 1),
+    //        Insert(requesterRef, id = 20, 2),
+    //        Insert(requesterRef, id = 21, 3),
+    //        Insert(requesterRef, id = 22, 0),
+    //        GC)
+    //  
+    //      val expectedReplies = List(
+    //        OperationFinished(id = 10),
+    //        OperationFinished(id = 20),
+    //        OperationFinished(id = 21),
+    //        OperationFinished(id = 22),
+    //        ContainsResult(23,true))
+    //  
+    //      verify(requester, ops, expectedReplies)
+  }
+
   test("instruction example") {
     val requester = TestProbe()
     val requesterRef = requester.ref
     val ops = List(
-      Insert(requesterRef, id=100, 1),
-      Contains(requesterRef, id=50, 2),
-      Remove(requesterRef, id=10, 1),
-      Insert(requesterRef, id=20, 2),
-      Contains(requesterRef, id=80, 1),
-      Contains(requesterRef, id=70, 2)
-      )
+      Insert(requesterRef, id = 100, 1),
+      Contains(requesterRef, id = 50, 2),
+      Remove(requesterRef, id = 10, 1),
+      Insert(requesterRef, id = 20, 2),
+      Contains(requesterRef, id = 80, 1),
+      Contains(requesterRef, id = 70, 2))
 
     val expectedReplies = List(
-      OperationFinished(id=10),
-      OperationFinished(id=20),
-      ContainsResult(id=50, false),
-      ContainsResult(id=70, true),
-      ContainsResult(id=80, false),
-      OperationFinished(id=100)
-      )
+      OperationFinished(id = 10),
+      OperationFinished(id = 20),
+      ContainsResult(id = 50, false),
+      ContainsResult(id = 70, true),
+      ContainsResult(id = 80, false),
+      OperationFinished(id = 100))
 
     verify(requester, ops, expectedReplies)
   }
@@ -115,7 +156,7 @@ class BinaryTreeSuite(_system: ActorSystem) extends TestKit(_system) with FunSui
 
     val requester = TestProbe()
     val topNode = system.actorOf(Props[BinaryTreeSet])
-    val count = 1000
+    val count = 100
 
     val ops = randomOperations(requester.ref, count)
     val expectedReplies = referenceReplies(ops)
