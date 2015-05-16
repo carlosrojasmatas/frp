@@ -147,39 +147,6 @@ class BinaryTreeNode(val elem: Int, initiallyRemoved: Boolean) extends Actor {
           }
       }
     }
-    //    case Contains(requester, id, value) => {
-    //      if (value == elem) {
-    //        requester ! ContainsResult(id, !removed)
-    //      } else {
-    //        if (value < elem) {
-    //          subtrees get (Left) match {
-    //            case Some(left) => {
-    //              left ! Contains(requester, id, value)
-    //            }
-    //
-    //            case None => {
-    //              requester ! ContainsResult(id, false)
-    //            }
-    //          }
-    //        }
-    //
-    //        if (value > elem) {
-    //          subtrees get (Right) match {
-    //            case Some(right) => {
-    //              right ! Contains(requester, id, value)
-    //            }
-    //
-    //            case None => {
-    //              requester ! ContainsResult(id, false)
-    //            }
-    //          }
-    //        }
-    //      }
-    //    }
-
-    //        case in:Insert if in.elem == elem && removed => 
-    //          removed = false
-    //          in.requester ! OperationFinished(in.id)
 
     case in: Insert => {
       if (in.elem > elem) {
@@ -210,46 +177,6 @@ class BinaryTreeNode(val elem: Int, initiallyRemoved: Boolean) extends Actor {
       }
     }
 
-    //    case Insert(requester, id, value) => {
-    //      if (value < elem && subtrees.contains(Left)) {
-    //        subtrees.get(Left) match {
-    //          case Some(left) => {
-    //            left ! Insert(requester, id, value)
-    //          }
-    //
-    //          case None =>
-    //        }
-    //      }
-    //
-    //      if (value > elem && subtrees.contains(Right)) {
-    //        subtrees.get(Right) match {
-    //          case Some(right) => {
-    //            right ! Insert(requester, id, value)
-    //          }
-    //
-    //          case None =>
-    //        }
-    //      }
-    //
-    //      if (value < elem && !subtrees.contains(Left)) {
-    //        subtrees += Left -> context.actorOf(BinaryTreeNode.props(value, false))
-    //        requester ! OperationFinished(id)
-    //      }
-    //
-    //      if (value > elem && !subtrees.contains(Right)) {
-    //        subtrees += Right -> context.actorOf(BinaryTreeNode.props(value, false))
-    //        requester ! OperationFinished(id)
-    //      }
-    //
-    //      if (value == elem) {
-    //        if (removed) {
-    //          removed = false
-    //        }
-    //
-    //        requester ! OperationFinished(id)
-    //      }
-    //    }
-
     //remove handler
 
     case rem: Remove => {
@@ -274,80 +201,18 @@ class BinaryTreeNode(val elem: Int, initiallyRemoved: Boolean) extends Actor {
       }
     }
 
-    //    case Remove(requester, id, value) => {
-    //      if (value == elem) {
-    //        removed = true
-    //        requester ! OperationFinished(id)
-    //      } else {
-    //        if (value < elem) {
-    //          subtrees get (Left) match {
-    //            case Some(left) => {
-    //              left ! Remove(requester, id, value)
-    //            }
-    //
-    //            case None => {
-    //              requester ! OperationFinished(id)
-    //            }
-    //          }
-    //        }
-    //
-    //        if (value > elem) {
-    //          subtrees get (Right) match {
-    //            case Some(right) => {
-    //              right ! Remove(requester, id, value)
-    //            }
-    //
-    //            case None => {
-    //              requester ! OperationFinished(id)
-    //            }
-    //          }
-    //        }
-    //      }
-    //    }
+    case ct: CopyTo => {
 
-        case ct: CopyTo => {
-    
-          val expected = subtrees.map{case (k,v)=> v}.toSet
-    
-          if (expected.isEmpty && removed) sender ! CopyFinished //empty leaf
-          else{
-        	  context.become(copying(expected, removed))
-        	  expected.foreach(_ ! ct)
-            if(!removed) ct.treeNode ! Insert(self, -1,elem)
-          }
-    
-        }
+      val expected = subtrees.map { case (k, v) => v }.toSet
 
-//    case CopyTo(newRoot) => {
-//      var expected = Set[ActorRef]()
-//
-//      subtrees get (Left) match {
-//        case Some(left) => {
-//          expected = expected + left
-//        }
-//
-//        case None =>
-//      }
-//
-//      subtrees get (Right) match {
-//        case Some(right) => {
-//          expected = expected + right
-//        }
-//
-//        case None =>
-//      }
-//
-//      if (expected.isEmpty && removed) {
-//        context.parent ! CopyFinished
-//      } else {
-//        context.become(copying(expected, removed))
-//        expected foreach (_ ! CopyTo(newRoot))
-//
-//        if (!removed) {
-//          newRoot ! Insert(self, -1, elem)
-//        }
-//      }
-//    }
+      if (expected.isEmpty && removed) sender ! CopyFinished //empty leaf
+      else {
+        context.become(copying(expected, removed))
+        expected.foreach(_ ! ct)
+        if (!removed) ct.treeNode ! Insert(self, -1, elem)
+      }
+
+    }
 
   }
 
