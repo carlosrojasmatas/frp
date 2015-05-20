@@ -1,4 +1,4 @@
-submitProjectName := "actorbintree"
+submitProjectName := "kvstore"
 
 scalaVersion := "2.11.5"
 
@@ -19,9 +19,7 @@ projectDetailsMap := {
     "org.slf4j" % "slf4j-api" % "1.7.5",
     "org.slf4j" % "slf4j-simple" % "1.7.5",
     "com.squareup.retrofit" % "retrofit" % "1.0.0",
-    "org.scala-lang.modules" %% "scala-async" % "0.9.2",
-    "com.ning" % "async-http-client" % "1.7.19",
-    "org.jsoup" % "jsoup" % "1.8.1"
+    "org.scala-lang.modules" %% "scala-async" % "0.9.2"
   )
 
   val depsAkka = Seq(
