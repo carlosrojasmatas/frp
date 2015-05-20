@@ -39,15 +39,17 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   /*
    * The contents of this actor is just a suggestion, you can implement it in any way you like.
    */
-  
+
   var kv = Map.empty[String, String]
   // a map from secondary replicas to replicators
   var secondaries = Map.empty[ActorRef, ActorRef]
   // the current set of replicators
   var replicators = Set.empty[ActorRef]
-  
+
   var persister = context.actorOf(persistenceProps)
-  
+
+  var currSeq = 0L
+
   override def preStart() = {
     arbiter ! Join
   }
@@ -59,27 +61,40 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
 
   /* TODO Behavior for  the leader role. */
   val leader: Receive = {
-    case Insert(key,value,id) => {
-//    	persister ! Persist(key,Some(value),id)
-      
+    case Insert(key, value, id) => {
+      //    	persister ! Persist(key,Some(value),id)
+
       kv = kv.updated(key, value)
       sender ! OperationAck(id)
     }
-    
-    case Remove(key,id) => {
+
+    case Remove(key, id) => {
       kv = kv - key
       sender ! OperationAck(id)
     }
-    
-    case Get(key,id) =>
-     sender ! GetResult(key,kv.get(key),id)
-    
+
+    case Get(key, id) =>
+      sender ! GetResult(key, kv.get(key), id)
+
   }
 
   /* TODO Behavior for the replica role. */
   val replica: Receive = {
-    case Get(key,id) => sender ! GetResult(key,kv.get(key),id)
-    case _ => 
+    case Get(key, id) => sender ! GetResult(key, kv.get(key), id)
+    case Snapshot(key, value, seq) => 
+      
+      if(seq > currSeq) ()
+      else if (seq < currSeq) sender ! SnapshotAck(key,seq)
+      else{
+        value match {
+          case Some(v) => kv = kv.updated(key, v)
+          case None    => kv = kv - key
+        }
+        
+        sender ! SnapshotAck(key, seq)
+        currSeq += 1
+      }
+    case op: Operation => sender ! OperationFailed(op.id)
   }
 
 }
