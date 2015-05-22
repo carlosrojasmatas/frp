@@ -55,6 +55,7 @@ class Replicator(val replica: ActorRef) extends Actor {
 
     case SnapshotAck(key, seq) => {
       waitingRoom.get(seq).map(c => c.cancel())
+      waitingRoom = waitingRoom - seq
       val _senderEntry = acks(seq)
       _senderEntry._1 ! Replicated(key, _senderEntry._2.id)
       acks = acks - seq
@@ -63,7 +64,7 @@ class Replicator(val replica: ActorRef) extends Actor {
     case Flush =>
       pending ++ retransmitables foreach (replica ! _)
       pending = Vector.empty[Snapshot]
-    case Terminated(t) => println("replica is down")
+    case Terminated(t) => context.stop(self)
 
   }
 
