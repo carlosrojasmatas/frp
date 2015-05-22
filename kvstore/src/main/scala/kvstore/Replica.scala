@@ -75,6 +75,12 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
 
     case Get(key, id) =>
       sender ! GetResult(key, kv.get(key), id)
+      
+    case Replicas(replicas) => replicas foreach{ r => 
+      val replicator = context.actorOf(Replicator.props(r))
+      kv.zipWithIndex.foreach(kv => replicator ! Replicate(kv._1._1, Some(kv._1._2), kv._2))
+      replicators += replicator
+    }
 
   }
 
