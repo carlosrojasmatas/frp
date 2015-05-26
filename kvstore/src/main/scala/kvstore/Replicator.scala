@@ -23,6 +23,7 @@ class Replicator(val replica: ActorRef) extends Actor {
   import context.dispatcher
 
   private case object Flush
+  private case object Retry
   /*
    * The contents of this actor is just a suggestion, you can implement it in any way you like.
    */
@@ -41,7 +42,8 @@ class Replicator(val replica: ActorRef) extends Actor {
     ret
   }
 
-  context.system.scheduler.schedule(0 milliseconds, 100 milliseconds, self, Flush)
+  context.system.scheduler.schedule(100 milliseconds, 100 milliseconds, self, Flush)
+//  context.system.scheduler.schedule(0 milliseconds, 100 milliseconds, self, Retry)
 
   /* TODO Behavior for the Replicator. */
   def receive: Receive = {
@@ -50,7 +52,7 @@ class Replicator(val replica: ActorRef) extends Actor {
       val seq = nextSeq
       acks = acks.updated(seq, (sender, r))
       pending = batch(Replicator.Snapshot(key, valueOption, seq))
-      waitingRoom += (seq -> context.system.scheduler.scheduleOnce(200 milliseconds, self, SnapshotAck(key, seq)))
+      waitingRoom += (seq -> context.system.scheduler.scheduleOnce(400 milliseconds, self, SnapshotAck(key, seq)))
     }
 
     case SnapshotAck(key, seq) => {
@@ -64,6 +66,8 @@ class Replicator(val replica: ActorRef) extends Actor {
     case Flush =>
       pending ++ retransmitables foreach (replica ! _)
       pending = Vector.empty[Snapshot]
+    case Retry =>
+      retransmitables foreach (replica ! _)
     case Terminated(t) => context.stop(self)
 
   }
@@ -72,6 +76,7 @@ class Replicator(val replica: ActorRef) extends Actor {
     val s = for {
       seq <- waitingRoom.keySet
       rep <- acks.get(seq)
+      if(pending.indexWhere { seq == _.seq } == -1)
     } yield {
       Snapshot(rep._2.key, rep._2.valueOption, seq)
     }

@@ -126,9 +126,11 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
       else if (seq < currSeq) sender ! SnapshotAck(key, seq)
       else {
         val p = Persist(key, value, seq)
-        persister ! p
+        currSeq = currSeq + 1
+//        persister ! p
         acks = acks.updated(seq, (sender, p))
-        waitingRoom = waitingRoom.updated(seq, context.system.scheduler.schedule(0 milliseconds, 100 milliseconds, self, Retry(seq)))
+        sender ! SnapshotAck(key, seq)
+//        waitingRoom = waitingRoom.updated(seq, context.system.scheduler.schedule(0 milliseconds, 100 milliseconds, self, Retry(seq)))
         value match {
           case Some(v) => kv = kv.updated(key, v)
           case None    => kv -= key
