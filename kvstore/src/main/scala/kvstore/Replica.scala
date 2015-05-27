@@ -45,6 +45,7 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
    * The contents of this actor is just a suggestion, you can implement it in any way you like.
    */
 
+  private type RetryOrFail = (Cancellable, Cancellable)
   var kv = Map.empty[String, String]
   // a map from secondary replicas to replicators
   var secondaries = Map.empty[ActorRef, ActorRef]
@@ -54,7 +55,7 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   var persister = context.actorOf(persistenceProps)
 
   var acks = Map.empty[Long, (ActorRef, Persist)]
-  var waitingRoom = Map.empty[Long, Cancellable]
+  var waitingRoom = Map.empty[Long, RetryOrFail]
 
   override val supervisorStrategy = AllForOneStrategy(10, 1 second) {
     case e: PersistenceException => {
@@ -78,21 +79,35 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
     case i @ Insert(key, value, id) => {
       val persist = Persist(key, Some(value), id)
       persister ! persist
+      replicators foreach (_ ! Replicate(key, Some(value), id))
       kv = kv.updated(key, value)
       acks = acks.updated(id, (sender, persist))
-      waitingRoom = waitingRoom.updated(id, context.system.scheduler.schedule(0 milliseconds, 100 milliseconds, self, Retry(id)))
+      waitingRoom = waitingRoom.updated(id,
+        (context.system.scheduler.schedule(0 milliseconds, 100 milliseconds, self, Retry(id)),
+          context.system.scheduler.scheduleOnce(1 second, self, OperationFailed(id))))
     }
-
+    
+    case Replicated(key,id)=>
+      
+      
+      
     case Retry(id) =>
       acks.get(id) map {
         case (k, op) => persister ! op
       }
+    case of @ OperationFailed(id) =>
+      acks(id)._1 ! of
+      waitingRoom(id)._1.cancel()
+      waitingRoom(id)._2.cancel()
+      waitingRoom -= id
+      acks -= id
 
     case Persisted(key, id) =>
       val ref = acks(id)
       ref._1 ! OperationAck(id)
       acks -= id
-      waitingRoom(id).cancel()
+      waitingRoom(id)._1.cancel()
+      waitingRoom(id)._2.cancel()
       waitingRoom -= id
 
     case Remove(key, id) => {
@@ -109,6 +124,8 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
       kv.zipWithIndex.foreach(kv => replicator ! Replicate(kv._1._1, Some(kv._1._2), kv._2))
       replicators += replicator
     }
+    
+    case Terminated(replicator) => replicators = replicators - replicator
 
   }
 
@@ -116,37 +133,38 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   val replica: Receive = {
     case Get(key, id) => sender ! GetResult(key, kv.get(key), id)
 
-    case Retry =>
-      acks foreach {
-        case (k, v) => v._1 ! v._2
-      }
-
     case Snapshot(key, value, seq) =>
       if (seq > currSeq) ()
       else if (seq < currSeq) sender ! SnapshotAck(key, seq)
       else {
         val p = Persist(key, value, seq)
-        currSeq = currSeq + 1
-//        persister ! p
+        persister ! p
         acks = acks.updated(seq, (sender, p))
-        sender ! SnapshotAck(key, seq)
-//        waitingRoom = waitingRoom.updated(seq, context.system.scheduler.schedule(0 milliseconds, 100 milliseconds, self, Retry(seq)))
+        waitingRoom = waitingRoom.updated(seq,
+          (context.system.scheduler.schedule(0 milliseconds, 100 milliseconds, self, Retry(seq)), //retry every 100 ms and after 1 second fail
+            context.system.scheduler.scheduleOnce(1 second, self, OperationFailed(seq))))
         value match {
           case Some(v) => kv = kv.updated(key, v)
           case None    => kv -= key
         }
       }
 
+    case OperationFailed(seq) =>
+      acks -= seq
+      waitingRoom(seq)._1.cancel()
+      waitingRoom(seq)._2.cancel()
+      waitingRoom -= seq
+
     case Persisted(key, id) =>
       val ref = acks(id)
-      currSeq = id
+      currSeq += 1
       ref._1 ! SnapshotAck(key, id)
       acks -= id
-      waitingRoom(id).cancel()
+      waitingRoom(id)._1.cancel()
+      waitingRoom(id)._2.cancel()
       waitingRoom -= id
 
-    case op: Operation          => sender ! OperationFailed(op.id)
-    case Terminated(replicator) => replicators = replicators - replicator
+//    case op: Operation          => sender ! OperationFailed(op.id)
 
     case Retry(id) =>
       acks.get(id) map {

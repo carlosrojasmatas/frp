@@ -23,7 +23,7 @@ class Replicator(val replica: ActorRef) extends Actor {
   import context.dispatcher
 
   private case object Flush
-  private case object Retry
+  private case class ReplicationFailed(seq:Long)
   /*
    * The contents of this actor is just a suggestion, you can implement it in any way you like.
    */
@@ -54,6 +54,10 @@ class Replicator(val replica: ActorRef) extends Actor {
       pending = batch(Replicator.Snapshot(key, valueOption, seq))
       waitingRoom += (seq -> context.system.scheduler.scheduleOnce(400 milliseconds, self, SnapshotAck(key, seq)))
     }
+    
+    case ReplicationFailed(seq) =>
+      acks -= seq
+      waitingRoom -= seq
 
     case SnapshotAck(key, seq) => {
       waitingRoom.get(seq).map(c => c.cancel())
