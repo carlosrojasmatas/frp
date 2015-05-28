@@ -23,7 +23,7 @@ class Replicator(val replica: ActorRef) extends Actor {
   import context.dispatcher
 
   private case object Flush
-  private case class ReplicationFailed(seq:Long)
+  private case class ReplicationFailed(seq: Long)
   /*
    * The contents of this actor is just a suggestion, you can implement it in any way you like.
    */
@@ -43,27 +43,36 @@ class Replicator(val replica: ActorRef) extends Actor {
   }
 
   context.system.scheduler.schedule(100 milliseconds, 100 milliseconds, self, Flush)
-//  context.system.scheduler.schedule(0 milliseconds, 100 milliseconds, self, Retry)
+  //  context.system.scheduler.schedule(0 milliseconds, 100 milliseconds, self, Retry)
 
   /* TODO Behavior for the Replicator. */
   def receive: Receive = {
 
     case r @ Replicate(key, valueOption, id) => {
       val seq = nextSeq
+      println(s"${self.path}: starting replication $id with sender ${sender.path} and seq $seq")
       acks = acks.updated(seq, (sender, r))
+      println(acks)
       pending = batch(Replicator.Snapshot(key, valueOption, seq))
-      waitingRoom += (seq -> context.system.scheduler.scheduleOnce(400 milliseconds, self, SnapshotAck(key, seq)))
+      waitingRoom += (seq -> context.system.scheduler.scheduleOnce(1 second, self, ReplicationFailed(seq)))
     }
-    
+
     case ReplicationFailed(seq) =>
+      println("failed")
       acks -= seq
       waitingRoom -= seq
 
     case SnapshotAck(key, seq) => {
+      println(acks)
+      println(s"ack received: $key from sender ${sender.path} with seq $seq")
+      println(s"${acks.contains(seq)}")
       waitingRoom.get(seq).map(c => c.cancel())
       waitingRoom = waitingRoom - seq
-      val _senderEntry = acks(seq)
-      _senderEntry._1 ! Replicated(key, _senderEntry._2.id)
+      acks.get(seq) map (e => {
+        println(s"sending ack to sender ${e._1.path}")
+        e._1 ! Replicated(key, e._2.id)
+      })
+
       acks = acks - seq
     }
 
@@ -80,7 +89,7 @@ class Replicator(val replica: ActorRef) extends Actor {
     val s = for {
       seq <- waitingRoom.keySet
       rep <- acks.get(seq)
-      if(pending.indexWhere { seq == _.seq } == -1)
+      if (pending.indexWhere { seq == _.seq } == -1)
     } yield {
       Snapshot(rep._2.key, rep._2.valueOption, seq)
     }

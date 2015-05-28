@@ -16,6 +16,9 @@ import akka.util.Timeout
 import akka.actor.AllForOneStrategy
 import scala.language.postfixOps
 import akka.actor.Cancellable
+import kvstore.PersistenceMonitor.Done
+import kvstore.PersistenceMonitor.Fact
+import kvstore.PersistenceMonitor.Done
 
 object Replica {
   sealed trait Operation {
@@ -45,7 +48,6 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
    * The contents of this actor is just a suggestion, you can implement it in any way you like.
    */
 
-  private type RetryOrFail = (Cancellable, Cancellable)
   var kv = Map.empty[String, String]
   // a map from secondary replicas to replicators
   var secondaries = Map.empty[ActorRef, ActorRef]
@@ -54,8 +56,10 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
 
   var persister = context.actorOf(persistenceProps)
 
-  var acks = Map.empty[Long, (ActorRef, Persist)]
-  var waitingRoom = Map.empty[Long, RetryOrFail]
+  var monitors = Map.empty[Long, ActorRef]
+
+  var acks = Map.empty[Long, ActorRef]
+  var waitingRoom = Map.empty[Long, Cancellable]
 
   override val supervisorStrategy = AllForOneStrategy(10, 1 second) {
     case e: PersistenceException => {
@@ -74,57 +78,53 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
     case JoinedSecondary => context.become(replica)
   }
 
-  /* TODO Behavior for  the leader role. */
   val leader: Receive = {
+
     case i @ Insert(key, value, id) => {
-      val persist = Persist(key, Some(value), id)
-      persister ! persist
-      replicators foreach (_ ! Replicate(key, Some(value), id))
+
+      val monitor = context.actorOf(PersistenceMonitor.props(replicators, persister, Fact(key, Some(value), id)))
+      waitingRoom = waitingRoom.updated(id, context.system.scheduler.scheduleOnce(1 second, self, OperationFailed(id)))
+      acks = acks.updated(id, sender)
       kv = kv.updated(key, value)
-      acks = acks.updated(id, (sender, persist))
-      waitingRoom = waitingRoom.updated(id,
-        (context.system.scheduler.schedule(0 milliseconds, 100 milliseconds, self, Retry(id)),
-          context.system.scheduler.scheduleOnce(1 second, self, OperationFailed(id))))
+
     }
-    
-    case Replicated(key,id)=>
-      
-      
-      
-    case Retry(id) =>
-      acks.get(id) map {
-        case (k, op) => persister ! op
-      }
-    case of @ OperationFailed(id) =>
-      acks(id)._1 ! of
-      waitingRoom(id)._1.cancel()
-      waitingRoom(id)._2.cancel()
+
+    case r @ Replicated(key, id) =>
+      println("wrooongggg")
+      monitors(id) ! r
+
+    case Done(key, id) =>
+      waitingRoom(id).cancel()
+      acks(id) ! OperationAck(id)
       waitingRoom -= id
       acks -= id
 
-    case Persisted(key, id) =>
-      val ref = acks(id)
-      ref._1 ! OperationAck(id)
-      acks -= id
-      waitingRoom(id)._1.cancel()
-      waitingRoom(id)._2.cancel()
+    case of @ OperationFailed(id) =>
+      acks(id) ! of
       waitingRoom -= id
+      acks -= id
 
     case Remove(key, id) => {
+      val monitor = context.actorOf(PersistenceMonitor.props(replicators, persister, Fact(key, None, id)))
+      waitingRoom = waitingRoom.updated(id, context.system.scheduler.scheduleOnce(1 second, self, OperationFailed(id)))
+      acks = acks.updated(id, sender)
       kv = kv - key
-      sender ! OperationAck(id)
     }
 
     case Get(key, id) =>
       sender ! GetResult(key, kv.get(key), id)
 
     case Replicas(replicas) => replicas foreach { r =>
-      val replicator = context.actorOf(Replicator.props(r))
-      context.watch(replicator)
-      kv.zipWithIndex.foreach(kv => replicator ! Replicate(kv._1._1, Some(kv._1._2), kv._2))
-      replicators += replicator
+      if (!r.equals(self)) {
+        val replicator = context.actorOf(Replicator.props(r))
+        context.watch(replicator)
+//        kv.zipWithIndex.foreach(kv => {
+//          replicator ! Replicate(kv._1._1, Some(kv._1._2), kv._2)
+//        })
+        replicators += replicator
+      }
     }
-    
+
     case Terminated(replicator) => replicators = replicators - replicator
 
   }
@@ -134,42 +134,33 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
     case Get(key, id) => sender ! GetResult(key, kv.get(key), id)
 
     case Snapshot(key, value, seq) =>
+      println(s"current status $currSeq - $seq")
       if (seq > currSeq) ()
       else if (seq < currSeq) sender ! SnapshotAck(key, seq)
       else {
-        val p = Persist(key, value, seq)
-        persister ! p
-        acks = acks.updated(seq, (sender, p))
-        waitingRoom = waitingRoom.updated(seq,
-          (context.system.scheduler.schedule(0 milliseconds, 100 milliseconds, self, Retry(seq)), //retry every 100 ms and after 1 second fail
-            context.system.scheduler.scheduleOnce(1 second, self, OperationFailed(seq))))
+        println("ok, got it ")
+        val monitor = context.actorOf(PersistenceMonitor.props(replicators, persister, Fact(key, value, seq)))
+        waitingRoom = waitingRoom.updated(seq, context.system.scheduler.scheduleOnce(1 second, self, OperationFailed(seq)))
+        acks = acks.updated(seq, sender)
         value match {
           case Some(v) => kv = kv.updated(key, v)
           case None    => kv -= key
         }
+
       }
 
     case OperationFailed(seq) =>
       acks -= seq
-      waitingRoom(seq)._1.cancel()
-      waitingRoom(seq)._2.cancel()
+      waitingRoom(seq).cancel()
       waitingRoom -= seq
 
-    case Persisted(key, id) =>
-      val ref = acks(id)
+    case Done(key, id) =>
       currSeq += 1
-      ref._1 ! SnapshotAck(key, id)
+      acks(id) ! SnapshotAck(key, id)
       acks -= id
-      waitingRoom(id)._1.cancel()
-      waitingRoom(id)._2.cancel()
+      waitingRoom(id).cancel()
       waitingRoom -= id
 
-//    case op: Operation          => sender ! OperationFailed(op.id)
-
-    case Retry(id) =>
-      acks.get(id) map {
-        case (k, op) => persister ! op
-      }
   }
 
 }
