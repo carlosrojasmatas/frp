@@ -50,26 +50,19 @@ class Replicator(val replica: ActorRef) extends Actor {
 
     case r @ Replicate(key, valueOption, id) => {
       val seq = nextSeq
-      println(s"${self.path}: starting replication $id with sender ${sender.path} and seq $seq")
       acks = acks.updated(seq, (sender, r))
-      println(acks)
       pending = batch(Replicator.Snapshot(key, valueOption, seq))
       waitingRoom += (seq -> context.system.scheduler.scheduleOnce(1 second, self, ReplicationFailed(seq)))
     }
 
     case ReplicationFailed(seq) =>
-      println("failed")
       acks -= seq
       waitingRoom -= seq
 
     case SnapshotAck(key, seq) => {
-      println(acks)
-      println(s"ack received: $key from sender ${sender.path} with seq $seq")
-      println(s"${acks.contains(seq)}")
       waitingRoom.get(seq).map(c => c.cancel())
       waitingRoom = waitingRoom - seq
       acks.get(seq) map (e => {
-        println(s"sending ack to sender ${e._1.path}")
         e._1 ! Replicated(key, e._2.id)
       })
 

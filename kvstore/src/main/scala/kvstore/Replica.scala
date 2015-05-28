@@ -19,6 +19,8 @@ import akka.actor.Cancellable
 import kvstore.PersistenceMonitor.Done
 import kvstore.PersistenceMonitor.Fact
 import kvstore.PersistenceMonitor.Done
+import kvstore.PersistenceMonitor.Fact
+import kvstore.PersistenceMonitor.ReplicaDown
 
 object Replica {
   sealed trait Operation {
@@ -83,6 +85,7 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
     case i @ Insert(key, value, id) => {
 
       val monitor = context.actorOf(PersistenceMonitor.props(replicators, persister, Fact(key, Some(value), id)))
+      monitors = monitors.updated(id, monitor)
       waitingRoom = waitingRoom.updated(id, context.system.scheduler.scheduleOnce(1 second, self, OperationFailed(id)))
       acks = acks.updated(id, sender)
       kv = kv.updated(key, value)
@@ -90,14 +93,18 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
     }
 
     case r @ Replicated(key, id) =>
-      println("wrooongggg")
       monitors(id) ! r
 
     case Done(key, id) =>
-      waitingRoom(id).cancel()
-      acks(id) ! OperationAck(id)
-      waitingRoom -= id
-      acks -= id
+      monitors -= id
+      waitingRoom get (id) match {
+        case Some(w) =>
+          w.cancel()
+          acks(id) ! OperationAck(id)
+          waitingRoom -= id
+          acks -= id
+        case _ =>
+      }
 
     case of @ OperationFailed(id) =>
       acks(id) ! of
@@ -106,6 +113,7 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
 
     case Remove(key, id) => {
       val monitor = context.actorOf(PersistenceMonitor.props(replicators, persister, Fact(key, None, id)))
+      monitors = monitors.updated(id, monitor)
       waitingRoom = waitingRoom.updated(id, context.system.scheduler.scheduleOnce(1 second, self, OperationFailed(id)))
       acks = acks.updated(id, sender)
       kv = kv - key
@@ -114,16 +122,33 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
     case Get(key, id) =>
       sender ! GetResult(key, kv.get(key), id)
 
-    case Replicas(replicas) => replicas foreach { r =>
-      if (!r.equals(self)) {
-        val replicator = context.actorOf(Replicator.props(r))
-        context.watch(replicator)
-//        kv.zipWithIndex.foreach(kv => {
-//          replicator ! Replicate(kv._1._1, Some(kv._1._2), kv._2)
-//        })
-        replicators += replicator
+    case Replicas(replicas) =>
+      val toRemove = secondaries.keySet -- replicas
+      if (toRemove.size > 0) {
+        //to remove
+        toRemove foreach (r => {
+          monitors foreach (m => m._2 ! ReplicaDown)
+          context.stop(secondaries(r))
+        })
+      } else {
+        val toAdd = replicas -- secondaries.keySet
+        toAdd foreach {
+          r =>
+            {
+              if (!r.equals(self)) {
+                val replicator = context.actorOf(Replicator.props(r))
+                secondaries = secondaries.updated(r, replicator)
+                context.watch(replicator)
+                replicators += replicator
+                kv.zipWithIndex.foreach {
+                  case (k, v) => {
+                    context.actorOf(PersistenceMonitor.props(replicators, persister, Fact(k._1, Some(k._2), v)))
+                  }
+                }
+              }
+            }
+        }
       }
-    }
 
     case Terminated(replicator) => replicators = replicators - replicator
 
@@ -134,11 +159,9 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
     case Get(key, id) => sender ! GetResult(key, kv.get(key), id)
 
     case Snapshot(key, value, seq) =>
-      println(s"current status $currSeq - $seq")
       if (seq > currSeq) ()
       else if (seq < currSeq) sender ! SnapshotAck(key, seq)
       else {
-        println("ok, got it ")
         val monitor = context.actorOf(PersistenceMonitor.props(replicators, persister, Fact(key, value, seq)))
         waitingRoom = waitingRoom.updated(seq, context.system.scheduler.scheduleOnce(1 second, self, OperationFailed(seq)))
         acks = acks.updated(seq, sender)
