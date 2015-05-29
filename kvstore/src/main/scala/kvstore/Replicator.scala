@@ -60,12 +60,10 @@ class Replicator(val replica: ActorRef) extends Actor {
       waitingRoom -= seq
 
     case SnapshotAck(key, seq) => {
-      waitingRoom.get(seq).map(c => c.cancel())
+      waitingRoom(seq).cancel
       waitingRoom = waitingRoom - seq
-      acks.get(seq) map (e => {
-        e._1 ! Replicated(key, e._2.id)
-      })
-
+      val ackEntry =  acks(seq)
+      ackEntry._1 ! Replicated(key, ackEntry._2.id)
       acks = acks - seq
     }
 

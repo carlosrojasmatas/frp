@@ -179,11 +179,17 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
 
     case Done(key, id) =>
       currSeq += 1
-      acks(id) ! SnapshotAck(key, id)
-      acks -= id
-      waitingRoom(id).cancel()
-      waitingRoom -= id
-
+       monitors -= id
+      waitingRoom get (id) match {
+        case Some(w) =>
+          w.cancel()
+          acks(id) ! SnapshotAck(key, id)
+          waitingRoom -= id
+          acks -= id
+        case _ =>
+      }
+      
+      
   }
 
 }
