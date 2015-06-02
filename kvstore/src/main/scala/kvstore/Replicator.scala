@@ -3,10 +3,9 @@ package kvstore
 import akka.actor.Props
 import akka.actor.Actor
 import akka.actor.ActorRef
-import scala.concurrent.duration._
-import akka.actor.Terminated
-import scala.language.postfixOps
 import akka.actor.Cancellable
+
+import scala.concurrent.duration._
 
 object Replicator {
   case class Replicate(key: String, valueOption: Option[String], id: Long)
@@ -14,82 +13,99 @@ object Replicator {
 
   case class Snapshot(key: String, valueOption: Option[String], seq: Long)
   case class SnapshotAck(key: String, seq: Long)
+
+  case class CheckAck(id: Long)
+  case object FlushPending
+
   def props(replica: ActorRef): Props = Props(new Replicator(replica))
 }
 
 class Replicator(val replica: ActorRef) extends Actor {
+  import context.dispatcher
+  import scala.language.postfixOps
+
   import Replicator._
   import Replica._
-  import context.dispatcher
 
-  private case object Flush
-  private case class ReplicationFailed(seq: Long)
-  /*
-   * The contents of this actor is just a suggestion, you can implement it in any way you like.
-   */
+  val flushScheduler = context.system.scheduler.schedule(100 milliseconds, 100 milliseconds, self, FlushPending)
 
-  context.watch(replica)
-  // map from sequence number to pair of sender and request
-  var acks = Map.empty[Long, (ActorRef, Replicate)]
-  var waitingRoom = Map.empty[Long, Cancellable]
-  // a sequence of not-yet-sent snapshots (you can disregard this if not implementing batching)
+  var acknowledgements = Map.empty[Long, (ActorRef, Replicate)]
+  var acknowledgementTrackers = Map.empty[Long, Cancellable]
   var pending = Vector.empty[Snapshot]
-
   var _seqCounter = 0L
+
   def nextSeq = {
     val ret = _seqCounter
+
     _seqCounter += 1
     ret
   }
 
-  context.system.scheduler.schedule(100 milliseconds, 100 milliseconds, self, Flush)
-  //  context.system.scheduler.schedule(0 milliseconds, 100 milliseconds, self, Retry)
-
-  /* TODO Behavior for the Replicator. */
   def receive: Receive = {
 
-    case r @ Replicate(key, valueOption, id) => {
+    case message@Replicate(key, valueOption, id) => {
       val seq = nextSeq
-      acks = acks.updated(seq, (sender, r))
-      pending = batch(Replicator.Snapshot(key, valueOption, seq))
-      waitingRoom += (seq -> context.system.scheduler.scheduleOnce(1 second, self, ReplicationFailed(seq)))
+
+      acknowledgements += (seq -> (sender, message))
+      enqueueForBatchUpdate(Snapshot(key, valueOption, seq))
     }
 
-    case ReplicationFailed(seq) =>
-      acks -= seq
-      waitingRoom -= seq
+    case FlushPending => {
+      pending.foreach(tellReplicaAndScheduleAckCheck)
+      pending = Vector.empty[Snapshot]
+    }
 
     case SnapshotAck(key, seq) => {
-      waitingRoom(seq).cancel
-      waitingRoom = waitingRoom - seq
-      val ackEntry =  acks(seq)
-      ackEntry._1 ! Replicated(key, ackEntry._2.id)
-      acks = acks - seq
+      sendReplicated(seq)
     }
 
-    case Flush =>
-      pending ++ retransmitables foreach (replica ! _)
-      pending = Vector.empty[Snapshot]
-    case Retry =>
-      retransmitables foreach (replica ! _)
-    case Terminated(t) => context.stop(self)
-
-  }
-
-  private def retransmitables: Vector[Snapshot] = {
-    val s = for {
-      seq <- waitingRoom.keySet
-      rep <- acks.get(seq)
-      if (pending.indexWhere { seq == _.seq } == -1)
-    } yield {
-      Snapshot(rep._2.key, rep._2.valueOption, seq)
+    case CheckAck(seq) => {
+      acknowledgements.get(seq).map {
+        case (_, replicate) => {
+          tellReplicaAndScheduleAckCheck(Snapshot(replicate.key, replicate.valueOption, seq))
+        }
+      }
     }
-    s.toVector
-  }
-  private def batch(snap: Snapshot): Vector[Snapshot] = {
-    val idx = pending.indexWhere { snap.key == _.key }
-    if (idx != -1) pending = pending.drop(idx)
-    pending :+ snap
+
+    case _ => {}
   }
 
+  override def postStop(): Unit = {
+    flushScheduler.cancel()
+    acknowledgementTrackers.values.foreach(_.cancel())
+  }
+
+
+  private def enqueueForBatchUpdate(snapshot: Snapshot): Unit = {
+    val index = pending.indexWhere(snapshot.key == _.key)
+
+    if (index != -1) {
+      dequeueExistingSnapshot(index)
+    }
+
+    pending :+= snapshot
+  }
+
+  private def dequeueExistingSnapshot(index: Int) = {
+    sendReplicated(pending(index).seq)
+    pending = pending.patch(index, Nil, 1)
+  }
+
+  private def tellReplicaAndScheduleAckCheck(snapshot: Snapshot): Unit = {
+    replica ! snapshot
+
+    acknowledgementTrackers +=
+      (snapshot.seq -> context.system.scheduler.scheduleOnce(150 milliseconds, self, CheckAck(snapshot.seq)))
+  }
+
+  private def sendReplicated(seq: Long) = for((op, replicate) <- acknowledgements.get(seq)) {
+    removeAckTracker(seq)
+    acknowledgements = acknowledgements - seq
+    op ! Replicated(replicate.key, replicate.id)
+  }
+
+  private def removeAckTracker(seq: Long) = acknowledgementTrackers.get(seq).map { tracker =>
+    tracker.cancel()
+    acknowledgementTrackers = acknowledgementTrackers - seq
+  }
 }
