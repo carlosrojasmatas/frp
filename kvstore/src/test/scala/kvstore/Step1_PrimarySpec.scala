@@ -62,11 +62,11 @@ class Step1_PrimarySpec extends TestKit(ActorSystem("Step1PrimarySpec"))
 
     val arbiter = TestProbe()
 
-    val (primary, user) = createPrimary(arbiter, "case3-primary", flakyPersistence = true)
+    val (primary, user) = createPrimary(arbiter, "case3-primary", flakyPersistence = false)
 
     user.setAcked("k1", "v1")
-    val (secondary1, replica1) = createSecondary(arbiter, "case3-secondary1", flakyForwarder = false, flakyPersistence = true)
-    val (secondary2, replica2) = createSecondary(arbiter, "case3-secondary2", flakyForwarder = false, flakyPersistence = true)
+    val (secondary1, replica1) = createSecondary(arbiter, "case3-secondary1", flakyForwarder = false, flakyPersistence = false)
+    val (secondary2, replica2) = createSecondary(arbiter, "case3-secondary2", flakyForwarder = false, flakyPersistence = false)
 
     arbiter.send(primary, Replicas(Set(primary, secondary1, secondary2)))
 
@@ -78,7 +78,7 @@ class Step1_PrimarySpec extends TestKit(ActorSystem("Step1PrimarySpec"))
     assert(replica1.get("k1") === Some("v2"))
     assert(replica2.get("k1") === Some("v2"))
 
-    val (secondary3, replica3) = createSecondary(arbiter, "case3-secondary3", flakyForwarder = false, flakyPersistence = true)
+    val (secondary3, replica3) = createSecondary(arbiter, "case3-secondary3", flakyForwarder = false, flakyPersistence = false)
 
     arbiter.send(primary, Replicas(Set(primary, secondary1, secondary3)))
 

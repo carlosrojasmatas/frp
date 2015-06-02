@@ -101,8 +101,7 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
 
     case i @ Insert(key, value, id) => {
       timeoutTriggers = timeoutTriggers updated (id, context.system.scheduler.scheduleOnce(1 second, self, Timeout(key, id)))
-      val rFactor = if (replicators.size != 0) replicators.size - 1 else replicators.size
-      consistencyMap = consistencyMap updated (id, context.actorOf(ConsistencyManager.props(rFactor)))
+      consistencyMap = consistencyMap updated (id, context.actorOf(ConsistencyManager.props(replicators.size)))
       persister ! Persist(key, Some(value), id)
       retrys = retrys updated (id, context.system.scheduler.schedule(100 milliseconds, 100 milliseconds, self, Retry(id)))
       acks = acks.updated(id, UpdateRequest(sender, Left(i)))
@@ -151,8 +150,7 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
 
     case r @ Remove(key, id) => {
       timeoutTriggers = timeoutTriggers updated (id, context.system.scheduler.scheduleOnce(1 second, self, Timeout(key, id)))
-      val rFactor = if (replicators.size != 0) replicators.size - 1 else replicators.size
-      consistencyMap = consistencyMap updated (id, context.actorOf(ConsistencyManager.props(rFactor)))
+      consistencyMap = consistencyMap updated (id, context.actorOf(ConsistencyManager.props(replicators.size)))
       acks = acks.updated(id, UpdateRequest(sender, Right(r)))
       val p = Persist(key, None, id)
       retrys = retrys updated (id, context.system.scheduler.schedule(100 milliseconds, 100 milliseconds, persister, p))
@@ -166,9 +164,9 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
       sender ! GetResult(key, kv.get(key), id)
 
     case Replicas(replicas) =>
-      val removed = secondaries.keySet &~ replicas
-      val added = replicas &~ secondaries.keySet
-
+      val removed = secondaries.keySet &~ replicas.tail
+      val added = replicas.tail &~ secondaries.keySet
+      
       removed.foreach { r =>
         {
           //go over all pendings acks and confirm them once
@@ -184,7 +182,7 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
           secondaries -= r //removed from reference
         }
       }
-      def addLogic = { a: ActorRef =>
+      added.foreach { a: ActorRef =>
         val replicator = context.actorOf(Replicator.props(a))
         secondaries = secondaries.updated(a, replicator)
         context.watch(replicator)
@@ -195,10 +193,6 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
           }
         }
       }
-
-      if (secondaries.size == 0) // fresh start
-        added.tail.foreach(addLogic)
-      else added.foreach(addLogic) //already started
 
     case Terminated(replicator) => replicators = replicators - replicator
 
@@ -221,7 +215,7 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
       else {
         val p = Persist(key, value, seq)
         persister ! p
-        retrys = retrys updated (seq, context.system.scheduler.schedule(100 milliseconds, 100 milliseconds, persister, Retry(p.id)))
+        retrys = retrys updated (seq, context.system.scheduler.schedule(100 milliseconds, 100 milliseconds, persister,p))
         pendingAcks = pendingAcks.updated(key, SnapshotRequest(sender, s))
         timeoutTriggers = timeoutTriggers.updated(seq, context.system.scheduler.scheduleOnce(1 second, self, Timeout(key, seq)))
       }
@@ -242,16 +236,6 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
       origin.request.valueOption match {
         case Some(v) => kv = kv.updated(origin.request.key, v)
         case None    => kv -= origin.request.key
-      }
-
-    case Retry(id) =>
-      acks get (id) map {
-
-        req =>
-          req.request match {
-            case Left(i)  => persister ! Persist(i.key, Some(i.value), i.id)
-            case Right(r) => persister ! Persist(r.key, None, r.id)
-          }
       }
 
   }
