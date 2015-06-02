@@ -91,7 +91,6 @@ class Step5_PrimaryPersistenceSpec extends TestKit(ActorSystem("Step5PrimaryPers
     arbiter.expectMsg(Join)
     arbiter.send(primary, JoinedPrimary)
     arbiter.send(primary, Replicas(Set(primary, secondary.ref)))
-
     client.probe.within(1.second, 2.seconds) {
       val setId = client.set("foo", "bar")
       secondary.expectMsgType[Snapshot](200.millis)

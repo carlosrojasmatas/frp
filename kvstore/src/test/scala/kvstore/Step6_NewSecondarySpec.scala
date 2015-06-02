@@ -88,6 +88,7 @@ class Step6_NewSecondarySpec extends TestKit(ActorSystem("Step6NewSecondarySpec"
     val ack2 = user.set("k1", "v2")
     secondary.expectMsg(Snapshot("k1", Some("v2"), 1L))
     arbiter.send(primary, Replicas(Set(primary)))
+//    Thread.sleep(2000000)
     user.waitAck(ack2)
   }
 
