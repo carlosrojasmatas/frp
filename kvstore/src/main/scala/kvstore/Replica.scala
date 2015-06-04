@@ -54,13 +54,17 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
    * The contents of this actor is just a suggestion, you can implement it in any way you like.
    */
 
+  /*Start of new variables*/
   var kv = Map.empty[String, String]
-  // a map from secondary replicas to replicators
-  var secondaries = Map.empty[ActorRef, ActorRef]
-  // the current set of replicators
+  var secondaries = Map.empty[ActorRef, ActorRef] //replicators map
+  var consistency = Map.empty[String, ActorRef] //ConsistencyManagers. One per key.
+  var persister = context.actorOf(persistenceProps)
   var replicators = Set.empty[ActorRef]
 
-  var persister = context.actorOf(persistenceProps)
+  /*End of new variables*/
+
+  // a map from secondary replicas to replicators
+  // the current set of replicators
 
   case class SnapshotRequest(ref: ActorRef, request: Snapshot)
   case class UpdateRequest(ref: ActorRef, request: Either[Insert, Remove])
@@ -100,64 +104,15 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   val leader: Receive = {
 
     case i @ Insert(key, value, id) => {
-      timeoutTriggers = timeoutTriggers updated (id, context.system.scheduler.scheduleOnce(1 second, self, Timeout(key, id)))
-      consistencyMap = consistencyMap updated (id, context.actorOf(ConsistencyManager.props(replicators.size)))
-      persister ! Persist(key, Some(value), id)
-      retrys = retrys updated (id, context.system.scheduler.schedule(100 milliseconds, 100 milliseconds, self, Retry(id)))
-      acks = acks.updated(id, UpdateRequest(sender, Left(i)))
-      replicators foreach { r =>
-        r ! Replicate(key, Some(value), id)
-      }
+      kv +=(key -> value)
+      val cmgr = consistency.get(key) getOrElse (context.actorOf(ConsistencyManager.props(replicators, persister), s"con-mgr-$key"))
+      cmgr ! Ensure(key, Some(value), id)
     }
 
-    case Retry(id) =>
-      acks get (id) map {
-
-        req =>
-          req.request match {
-            case Left(i)  => persister ! Persist(i.key, Some(i.value), i.id)
-            case Right(r) => persister ! Persist(r.key, None, r.id)
-          }
-      }
-
-    case p @ Persisted(key, id) =>
-      retrys(id).cancel
-      retrys -= id
-      consistencyMap(id) ! p
-
-    case r @ Replicated(key, id) =>
-      consistencyMap(id) ! r
-
-    case Consistent(key, id) =>
-      timeoutTriggers(id).cancel
-      timeoutTriggers -= id
-      acks(id).ref ! OperationAck(id)
-
-      acks(id).request match {
-        case Left(i) =>
-          kv = kv.updated(key, i.value)
-        case Right(r) =>
-          kv -= key
-      }
-
-      acks -= id
-
-    case timeout @ Timeout(key, id) =>
-      acks(id).ref ! OperationFailed(id)
-      timeoutTriggers -= id
-      consistencyMap -= id
-      acks -= id
-
     case r @ Remove(key, id) => {
-      timeoutTriggers = timeoutTriggers updated (id, context.system.scheduler.scheduleOnce(1 second, self, Timeout(key, id)))
-      consistencyMap = consistencyMap updated (id, context.actorOf(ConsistencyManager.props(replicators.size)))
-      acks = acks.updated(id, UpdateRequest(sender, Right(r)))
-      val p = Persist(key, None, id)
-      retrys = retrys updated (id, context.system.scheduler.schedule(100 milliseconds, 100 milliseconds, persister, p))
-      persister ! p
-      replicators foreach { r =>
-        r ! Replicate(key, None, id)
-      }
+      kv -= key
+      val cmgr = consistency.get(key) getOrElse (context.actorOf(ConsistencyManager.props(replicators, persister), s"con-mgr-$key"))
+      cmgr ! Ensure(key, None, id)
     }
 
     case Get(key, id) =>
@@ -166,7 +121,7 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
     case Replicas(replicas) =>
       val removed = secondaries.keySet &~ replicas.tail
       val added = replicas.tail &~ secondaries.keySet
-      
+
       removed.foreach { r =>
         {
           //go over all pendings acks and confirm them once
@@ -194,7 +149,7 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
         }
       }
 
-    case Terminated(replicator) => replicators = replicators - replicator
+    case Terminated(replica) => secondaries(replica) ! PoisonPill
 
   }
 
@@ -202,42 +157,16 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   val replica: Receive = {
 
     case Get(key, id) => {
-      pendingAcks get (key) match {
-        case Some(v) => sender ! GetResult(key, v.request.valueOption, id)
-        case None    => sender ! GetResult(key, kv.get(key), id)
-      }
-
+      sender ! GetResult(key, kv.get(key), id)
     }
 
     case s @ Snapshot(key, value, seq) =>
       if (seq > currSeq) ()
       else if (seq < currSeq) sender ! SnapshotAck(key, seq)
       else {
-        val p = Persist(key, value, seq)
-        persister ! p
-        retrys = retrys updated (seq, context.system.scheduler.schedule(100 milliseconds, 100 milliseconds, persister,p))
-        pendingAcks = pendingAcks.updated(key, SnapshotRequest(sender, s))
-        timeoutTriggers = timeoutTriggers.updated(seq, context.system.scheduler.scheduleOnce(1 second, self, Timeout(key, seq)))
+        val cmgr = consistency.get(key) getOrElse (context.actorOf(ConsistencyManager.props(replicators, persister), s"con-mgr-$key"))
+        cmgr ! Ensure(key, value, seq)
       }
-
-    case Timeout(key, seq) =>
-      timeoutTriggers -= seq
-      pendingAcks -= key
-
-    case p: Persisted =>
-      currSeq = p.id + 1
-      retrys(p.id).cancel
-      retrys -= p.id
-      timeoutTriggers(p.id).cancel()
-      timeoutTriggers -= p.id
-      val origin = pendingAcks(p.key)
-      origin.ref ! SnapshotAck(origin.request.key, origin.request.seq)
-      pendingAcks -= p.key
-      origin.request.valueOption match {
-        case Some(v) => kv = kv.updated(origin.request.key, v)
-        case None    => kv -= origin.request.key
-      }
-
   }
 
 }
