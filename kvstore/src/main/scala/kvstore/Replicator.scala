@@ -74,10 +74,6 @@ class Replicator(val replica: ActorRef) extends Actor {
     case Flush =>
       pending ++ retransmitables foreach (replica ! _)
       pending = Vector.empty[Snapshot]
-    case Retry =>
-      retransmitables foreach (replica ! _)
-    case Terminated(t) => context.stop(self)
-
   }
 
   private def retransmitables: Vector[Snapshot] = {

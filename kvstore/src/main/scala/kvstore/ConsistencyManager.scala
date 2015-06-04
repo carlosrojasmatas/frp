@@ -17,7 +17,7 @@ import kvstore.Replicator.SnapshotAck
 
 object ConsistencyManager {
   case class Consistent(key: String, id: Long)
-  case class Ensure(key: String, value: Option[String], id: Long, sender: ActorRef, response: Unit => Any)
+  case class Ensure(key: String, value: Option[String], id: Long, sender: ActorRef, response: () => Any)
   case class ReplicaAdded(rep: ActorRef)
   case class ReplicaGone(rep: ActorRef)
   case object Retry
@@ -26,12 +26,12 @@ object ConsistencyManager {
   def props(replicators: Set[ActorRef], persister: ActorRef): Props = Props(classOf[ConsistencyManager], replicators, persister)
 }
 
-class ConsistencyManager(replicators: Set[ActorRef], persister: ActorRef) extends Actor {
+class ConsistencyManager(var replicators: Set[ActorRef], persister: ActorRef) extends Actor {
 
   import ConsistencyManager._
 
   private var workingList: Queue[Ensure] = Queue.empty
-  private var retries: Map[String, Cancellable] = Map.empty[String, Cancellable]
+  private var retries: Set[Cancellable] = Set.empty[Cancellable]
   private var timeouts: Map[String, Cancellable] = Map.empty[String, Cancellable]
   implicit val ec = context.system.dispatcher
 
@@ -39,16 +39,21 @@ class ConsistencyManager(replicators: Set[ActorRef], persister: ActorRef) extend
     case e: Ensure =>
       workingList = workingList.enqueue(e)
       context.become(next)
+    case a: ReplicaAdded => replicators += a.rep
+    case a: ReplicaGone  => replicators -= a.rep
   }
 
   def next: Receive = {
-    if (workingList.size > 0) processing(workingList.dequeue._1)
-    else receive
+    if (workingList.size > 0) {
+      val newState = workingList.dequeue
+      workingList = newState._2
+      processing(newState._1)
+    } else receive
   }
 
   def processing(e: Ensure): Receive = {
     persister ! Persist(e.key, e.value, e.id)
-    retries += (e.key -> context.system.scheduler.scheduleOnce(100 milliseconds, self, Retry))
+    retries += context.system.scheduler.scheduleOnce(100 milliseconds, self, Retry)
     timeouts += (e.key -> context.system.scheduler.scheduleOnce(1 second, self, Timeout))
     replicators foreach (_ ! Replicate(e.key, e.value, e.id))
     waitForConsistency(replicators, false, e)
@@ -61,7 +66,7 @@ class ConsistencyManager(replicators: Set[ActorRef], persister: ActorRef) extend
         if ((pendingReplicators - sender).size == 0) {
           if (persisted) {
             timeouts(key).cancel
-            e.sender ! e.response
+            e.sender ! e.response()
             context.become(next)
           }
         } else {
@@ -71,17 +76,19 @@ class ConsistencyManager(replicators: Set[ActorRef], persister: ActorRef) extend
 
     case p @ Persisted(key, id) => {
       if (pendingReplicators.size == 0) {
-        retries(key).cancel
         timeouts(key).cancel
-        context.parent ! Consistent(key, id)
+        e.sender ! e.response()
         context.become(next)
       } else {
         context.become(this.waitForConsistency(pendingReplicators, true, e))
       }
     }
 
+    case Retry =>
+      retries += context.system.scheduler.scheduleOnce(100 milliseconds, self, Retry)
+      persister ! Persist(e.key, e.value, e.id)
+
     case Timeout =>
-      retries.get(e.key) map (t => t.cancel)
       e.sender ! OperationFailed(e.id)
       context.become(next)
 
@@ -90,10 +97,22 @@ class ConsistencyManager(replicators: Set[ActorRef], persister: ActorRef) extend
 
     case a: ReplicaAdded =>
       a.rep ! Replicate(e.key, e.value, e.id)
-      context.become(waitForConsistency(replicators + a.rep, persisted, e))
+      context.become(waitForConsistency(pendingReplicators + a.rep, persisted, e))
+      replicators += a.rep
 
     case b: ReplicaGone =>
-      context.become(waitForConsistency(replicators - b.rep, persisted, e))
+      replicators -= b.rep
+      val nr = pendingReplicators - b.rep
+      if (nr.size == 0)
+        if (persisted) {
+          e.sender ! e.response()
+          context.become(next)
+        } else {
+          context.become(waitForConsistency(nr, persisted, e))
+        }
+      else {
+        context.become(waitForConsistency(nr, persisted, e))
+      }
 
   }
 }

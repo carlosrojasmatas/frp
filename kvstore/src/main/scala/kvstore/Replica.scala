@@ -1,27 +1,23 @@
 package kvstore
 
-import akka.actor.{ OneForOneStrategy, Props, ActorRef, Actor }
-import kvstore.Arbiter._
-import scala.collection.immutable.Queue
-import akka.actor.SupervisorStrategy.Restart
 import scala.annotation.tailrec
-import akka.pattern.{ ask, pipe }
-import akka.actor.Terminated
 import scala.concurrent.duration._
+import scala.language.postfixOps
+import scala.util.Right
+import akka.actor.Actor
+import akka.actor.ActorRef
+import akka.actor.AllForOneStrategy
+import akka.actor.Cancellable
 import akka.actor.PoisonPill
-import akka.actor.OneForOneStrategy
+import akka.actor.Props
 import akka.actor.SupervisorStrategy
 import akka.actor.SupervisorStrategy._
+import akka.actor.Terminated
+import akka.pattern.ask
+import akka.pattern.pipe
 import akka.util.Timeout
-import akka.actor.AllForOneStrategy
-import scala.language.postfixOps
-import akka.actor.Cancellable
-import kvstore.PersistenceMonitor.Done
-import kvstore.PersistenceMonitor.Fact
-import kvstore.PersistenceMonitor.Done
-import kvstore.PersistenceMonitor.Fact
-import kvstore.PersistenceMonitor.ReplicaDown
-import scala.util.Right
+import kvstore.Arbiter._
+import com.sun.org.apache.xerces.internal.impl.dtd.models.CMAny
 
 object Replica {
   sealed trait Operation {
@@ -36,7 +32,6 @@ object Replica {
   case class OperationAck(id: Long) extends OperationReply
   case class OperationFailed(id: Long) extends OperationReply
   case class GetResult(key: String, valueOption: Option[String], id: Long) extends OperationReply
-  case class Retry(id: Long)
 
   def props(arbiter: ActorRef, persistenceProps: Props): Props = Props(new Replica(arbiter, persistenceProps))
 
@@ -63,29 +58,8 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
 
   /*End of new variables*/
 
-  // a map from secondary replicas to replicators
-  // the current set of replicators
-
-  case class SnapshotRequest(ref: ActorRef, request: Snapshot)
-  case class UpdateRequest(ref: ActorRef, request: Either[Insert, Remove])
-  case class Timeout(key: String, seq: Long)
-
-  implicit def eitherOpToKey(either: Either[Insert, Remove]): String = {
-    either match {
-      case Right(r) => r.key
-      case Left(i)  => i.key
-    }
-  }
-
-  var pendingAcks = Map.empty[String, SnapshotRequest]
-  var acks = Map.empty[Long, UpdateRequest]
-  var consistencyMap = Map.empty[Long, ActorRef]
-  var timeoutTriggers = Map.empty[Long, Cancellable]
-  var retrys = Map.empty[Long, Cancellable]
-
   override val supervisorStrategy = AllForOneStrategy(10, 1 second) {
     case e: PersistenceException => {
-      e.printStackTrace()
       Resume
     }
   }
@@ -104,47 +78,46 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   val leader: Receive = {
 
     case i @ Insert(key, value, id) => {
-      kv +=(key -> value)
-      val cmgr = consistency.get(key) getOrElse (context.actorOf(ConsistencyManager.props(replicators, persister), s"con-mgr-$key"))
-      cmgr ! Ensure(key, Some(value), id)
+      kv += (key -> value)
+      val cmgr = managerFor(key)
+      cmgr ! Ensure(key, Some(value), id, sender, () => OperationAck(id))
     }
 
     case r @ Remove(key, id) => {
       kv -= key
       val cmgr = consistency.get(key) getOrElse (context.actorOf(ConsistencyManager.props(replicators, persister), s"con-mgr-$key"))
-      cmgr ! Ensure(key, None, id)
+      cmgr ! Ensure(key, None, id, sender, () => OperationAck(id))
     }
 
-    case Get(key, id) =>
+    case g @ Get(key, id) =>
       sender ! GetResult(key, kv.get(key), id)
 
-    case Replicas(replicas) =>
-      val removed = secondaries.keySet &~ replicas.tail
-      val added = replicas.tail &~ secondaries.keySet
-
+    case msg@Replicas(replicas) =>
+      val replicaSet = replicas - self
+      val removed = secondaries.keySet &~ replicaSet
+      val added = replicaSet &~ secondaries.keySet
       removed.foreach { r =>
         {
           //go over all pendings acks and confirm them once
-          acks foreach {
-            case (id, v) => {
-              val cmgr = consistencyMap(id)
-              val key: String = v.request
-              cmgr ! Replicated(key, id)
-            }
+
+          consistency.foreach {
+            case (key, mgr) => mgr ! ReplicaGone(secondaries(r))
           }
-          //          r ! PoisonPill //Stop the replica
-          secondaries(r) ! PoisonPill
+          secondaries(r) ! PoisonPill //stop the replicator
           secondaries -= r //removed from reference
         }
       }
+
       added.foreach { a: ActorRef =>
         val replicator = context.actorOf(Replicator.props(a))
-        secondaries = secondaries.updated(a, replicator)
-        context.watch(replicator)
         replicators += replicator
+        secondaries = secondaries.updated(a, replicator)
+        context.watch(a)
         kv.zipWithIndex.foreach {
           case (k, v) => {
-            replicator ! Replicate(k._1, Some(k._2), v)
+            val cMgr = managerFor(k._1)
+            cMgr ! ReplicaAdded(replicator)
+            cMgr ! Ensure(k._1, Some(k._2), v,self,()=>OperationAck(v))
           }
         }
       }
@@ -156,7 +129,7 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   /* TODO Behavior for the replica role. */
   val replica: Receive = {
 
-    case Get(key, id) => {
+    case g @ Get(key, id) => {
       sender ! GetResult(key, kv.get(key), id)
     }
 
@@ -164,9 +137,23 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
       if (seq > currSeq) ()
       else if (seq < currSeq) sender ! SnapshotAck(key, seq)
       else {
-        val cmgr = consistency.get(key) getOrElse (context.actorOf(ConsistencyManager.props(replicators, persister), s"con-mgr-$key"))
-        cmgr ! Ensure(key, value, seq)
+        value match {
+          case Some(v) => kv += (key -> v)
+          case None => kv -= key
+        }
+        val cmgr = managerFor(key)
+        cmgr ! Ensure(key, value, seq, sender, () => SnapshotAck(key, seq))
+        currSeq +=1
       }
+  }
+
+  private def managerFor(key: String): ActorRef = {
+    consistency.get(key) getOrElse {
+      val nc = context.actorOf(ConsistencyManager.props(replicators, persister), s"con-mgr-$key")
+      consistency += (key -> nc)
+      nc
+    }
+
   }
 
 }
