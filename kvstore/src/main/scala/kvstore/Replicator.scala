@@ -28,10 +28,9 @@ class Replicator(val replica: ActorRef) extends Actor {
    * The contents of this actor is just a suggestion, you can implement it in any way you like.
    */
 
-  context.watch(replica)
   // map from sequence number to pair of sender and request
   var acks = Map.empty[Long, (ActorRef, Replicate)]
-  var waitingRoom = Map.empty[Long, Cancellable]
+  var timeouts = Map.empty[Long, Cancellable]
   // a sequence of not-yet-sent snapshots (you can disregard this if not implementing batching)
   var pending = Vector.empty[Snapshot]
 
@@ -42,9 +41,13 @@ class Replicator(val replica: ActorRef) extends Actor {
     ret
   }
 
-  context.system.scheduler.schedule(100 milliseconds, 100 milliseconds, self, Flush)
+  val resender = context.system.scheduler.schedule(100 milliseconds, 100 milliseconds, self, Flush)
   //  context.system.scheduler.schedule(0 milliseconds, 100 milliseconds, self, Retry)
 
+  
+  override def postStop(){
+    resender.cancel()
+  }
   /* TODO Behavior for the Replicator. */
   def receive: Receive = {
 
@@ -52,18 +55,19 @@ class Replicator(val replica: ActorRef) extends Actor {
       val seq = nextSeq
       acks = acks.updated(seq, (sender, r))
       pending = batch(Replicator.Snapshot(key, valueOption, seq))
-      waitingRoom += (seq -> context.system.scheduler.scheduleOnce(1 second, self, ReplicationFailed(seq)))
+      timeouts += (seq -> context.system.scheduler.scheduleOnce(1 second, self, ReplicationFailed(seq)))
     }
 
     case ReplicationFailed(seq) =>
       acks -= seq
-      waitingRoom -= seq
+      timeouts -= seq
 
     case SnapshotAck(key, seq) => {
-      waitingRoom(seq).cancel
-      waitingRoom = waitingRoom - seq
-      val ackEntry =  acks(seq)
-      ackEntry._1 ! Replicated(key, ackEntry._2.id)
+      timeouts(seq).cancel
+      timeouts = timeouts - seq
+      val sender =  acks(seq)._1
+      val id =  acks(seq)._2.id
+      sender ! Replicated(key, id)
       acks = acks - seq
     }
 
@@ -78,7 +82,7 @@ class Replicator(val replica: ActorRef) extends Actor {
 
   private def retransmitables: Vector[Snapshot] = {
     val s = for {
-      seq <- waitingRoom.keySet
+      seq <- timeouts.keySet
       rep <- acks.get(seq)
       if (pending.indexWhere { seq == _.seq } == -1)
     } yield {
