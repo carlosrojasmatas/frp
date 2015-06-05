@@ -47,8 +47,9 @@ class Replicator(val replica: ActorRef) extends Actor {
   
   override def postStop(){
     resender.cancel()
+    timeouts.foreach(_._2.cancel())
   }
-  /* TODO Behavior for the Replicator. */
+
   def receive: Receive = {
 
     case r @ Replicate(key, valueOption, id) => {
@@ -58,17 +59,19 @@ class Replicator(val replica: ActorRef) extends Actor {
       timeouts += (seq -> context.system.scheduler.scheduleOnce(1 second, self, ReplicationFailed(seq)))
     }
 
-    case ReplicationFailed(seq) =>
+    case f@ReplicationFailed(seq) =>
       acks -= seq
       timeouts -= seq
 
-    case SnapshotAck(key, seq) => {
-      timeouts(seq).cancel
-      timeouts = timeouts - seq
-      val sender =  acks(seq)._1
-      val id =  acks(seq)._2.id
-      sender ! Replicated(key, id)
-      acks = acks - seq
+    case s@SnapshotAck(key, seq) => {
+      val senderpath = sender.path
+      timeouts get(seq) map (t => t.cancel)
+      timeouts -= seq
+      acks get(seq) map {
+        case(k,v) =>
+          k ! Replicated(v.key,v.id)
+      }
+      acks -= seq
     }
 
     case Flush =>

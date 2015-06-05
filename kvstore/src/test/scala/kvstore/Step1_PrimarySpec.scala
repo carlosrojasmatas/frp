@@ -58,106 +58,106 @@ class Step1_PrimarySpec extends TestKit(ActorSystem("Step1PrimarySpec"))
   
   }
 
-//  test("case3: Primary and secondaries must work in concert when persistence and communication to secondaries is unreliable") {
-//
-//    val arbiter = TestProbe()
-//
-//    val (primary, user) = createPrimary(arbiter, "case3-primary", flakyPersistence = false)
-//
-//    user.setAcked("k1", "v1")
-//    val (secondary1, replica1) = createSecondary(arbiter, "case3-secondary1", flakyForwarder = false, flakyPersistence = false)
-//    val (secondary2, replica2) = createSecondary(arbiter, "case3-secondary2", flakyForwarder = false, flakyPersistence = false)
-//
-//    arbiter.send(primary, Replicas(Set(primary, secondary1, secondary2)))
-//
-//    val options = Set(None, Some("v1"))
-//    options should contain(replica1.get("k1"))
-//    options should contain(replica2.get("k1"))
-//
-//    user.setAcked("k1", "v2")
-//    assert(replica1.get("k1") === Some("v2"))
-//    assert(replica2.get("k1") === Some("v2"))
-//
-//    val (secondary3, replica3) = createSecondary(arbiter, "case3-secondary3", flakyForwarder = false, flakyPersistence = false)
-//
-//    arbiter.send(primary, Replicas(Set(primary, secondary1, secondary3)))
-//
-//    replica3.nothingHappens(500.milliseconds)
-//
-//    assert(replica3.get("k1") === Some("v2"))
-//
-//    user.removeAcked("k1")
-//    assert(replica1.get("k1") === None)
-//    assert(replica2.get("k1") === Some("v2"))
-//    assert(replica3.get("k1") === None)
-//
-//    user.setAcked("k1", "v4")
-//    assert(replica1.get("k1") === Some("v4"))
-//    assert(replica2.get("k1") === Some("v2"))
-//    assert(replica3.get("k1") === Some("v4"))
-//
-//    user.setAcked("k2", "v1")
-//    user.setAcked("k3", "v1")
-//
-//    user.setAcked("k1", "v5")
-//    user.removeAcked("k1")
-//    user.setAcked("k1", "v7")
-//    user.removeAcked("k1")
-//    user.setAcked("k1", "v9")
-//    assert(replica1.get("k1") === Some("v9"))
-//    assert(replica2.get("k1") === Some("v2"))
-//    assert(replica3.get("k1") === Some("v9"))
-//
-//    assert(replica1.get("k2") === Some("v1"))
-//    assert(replica2.get("k2") === None)
-//    assert(replica3.get("k2") === Some("v1"))
-//
-//    assert(replica1.get("k3") === Some("v1"))
-//    assert(replica2.get("k3") === None)
-//    assert(replica3.get("k3") === Some("v1"))
-//  }
-//
-//  def createPrimary(arbiter: TestProbe, name: String, flakyPersistence: Boolean) = {
-//
-//    val primary = system.actorOf(Replica.props(arbiter.ref, Persistence.props(flakyPersistence)), name)
-//
-//    arbiter.expectMsg(Join)
-//    arbiter.send(primary, JoinedPrimary)
-//
-//    (primary, session(primary))
-//  }
-//
-//  def createSecondary(arbiter: TestProbe, name: String, flakyForwarder: Boolean, flakyPersistence: Boolean) = {
-//
-//    val secondary =
-//      if (flakyForwarder) system.actorOf(Props(new FlakyForwarder(Replica.props(arbiter.ref, Persistence.props(flakyPersistence)), name)), s"flaky-$name")
-//      else system.actorOf(Replica.props(arbiter.ref, Persistence.props(flakyPersistence)), name)
-//
-//    arbiter.expectMsg(Join)
-//    arbiter.send(secondary, JoinedSecondary)
-//
-//    (secondary, session(secondary))
-//  }
-//
-//  class FlakyForwarder(targetProps: Props, name: String) extends Actor with ActorLogging {
-//
-//    val child = context.actorOf(targetProps, name)
-//
-//    var flipFlop = true
-//
-//    def receive = {
-//
-//      case msg if sender == child =>
-//        context.parent forward msg
-//
-//      case msg: Snapshot =>
-//        if (flipFlop) child forward msg
-//        else log.debug(s"Dropping $msg")
-//        flipFlop = !flipFlop
-//
-//      case msg =>
-//        child forward msg
-//    }
-//  }
+  test("case3: Primary and secondaries must work in concert when persistence and communication to secondaries is unreliable") {
+
+    val arbiter = TestProbe()
+
+    val (primary, user) = createPrimary(arbiter, "case3-primary", flakyPersistence = true)
+
+    user.setAcked("k1", "v1")
+    val (secondary1, replica1) = createSecondary(arbiter, "case3-secondary1", flakyForwarder = true, flakyPersistence = true)
+    val (secondary2, replica2) = createSecondary(arbiter, "case3-secondary2", flakyForwarder = true, flakyPersistence = true)
+
+    arbiter.send(primary, Replicas(Set(primary, secondary1, secondary2)))
+
+    val options = Set(None, Some("v1"))
+    options should contain(replica1.get("k1"))
+    options should contain(replica2.get("k1"))
+
+    user.setAcked("k1", "v2")
+    assert(replica1.get("k1") === Some("v2"))
+    assert(replica2.get("k1") === Some("v2"))
+
+    val (secondary3, replica3) = createSecondary(arbiter, "case3-secondary3", flakyForwarder = true, flakyPersistence = true)
+
+    arbiter.send(primary, Replicas(Set(primary, secondary1, secondary3)))
+
+    replica3.nothingHappens(500.milliseconds)
+
+    assert(replica3.get("k1") === Some("v2"))
+
+    user.removeAcked("k1")
+    assert(replica1.get("k1") === None)
+    assert(replica2.get("k1") === Some("v2"))
+    assert(replica3.get("k1") === None)
+
+    user.setAcked("k1", "v4")
+    assert(replica1.get("k1") === Some("v4"))
+    assert(replica2.get("k1") === Some("v2"))
+    assert(replica3.get("k1") === Some("v4"))
+
+    user.setAcked("k2", "v1")
+    user.setAcked("k3", "v1")
+
+    user.setAcked("k1", "v5")
+    user.removeAcked("k1")
+    user.setAcked("k1", "v7")
+    user.removeAcked("k1")
+    user.setAcked("k1", "v9")
+    assert(replica1.get("k1") === Some("v9"))
+    assert(replica2.get("k1") === Some("v2"))
+    assert(replica3.get("k1") === Some("v9"))
+
+    assert(replica1.get("k2") === Some("v1"))
+    assert(replica2.get("k2") === None)
+    assert(replica3.get("k2") === Some("v1"))
+
+    assert(replica1.get("k3") === Some("v1"))
+    assert(replica2.get("k3") === None)
+    assert(replica3.get("k3") === Some("v1"))
+  }
+
+  def createPrimary(arbiter: TestProbe, name: String, flakyPersistence: Boolean) = {
+
+    val primary = system.actorOf(Replica.props(arbiter.ref, Persistence.props(flakyPersistence)), name)
+
+    arbiter.expectMsg(Join)
+    arbiter.send(primary, JoinedPrimary)
+
+    (primary, session(primary))
+  }
+
+  def createSecondary(arbiter: TestProbe, name: String, flakyForwarder: Boolean, flakyPersistence: Boolean) = {
+
+    val secondary =
+      if (flakyForwarder) system.actorOf(Props(new FlakyForwarder(Replica.props(arbiter.ref, Persistence.props(flakyPersistence)), name)), s"flaky-$name")
+      else system.actorOf(Replica.props(arbiter.ref, Persistence.props(flakyPersistence)), name)
+
+    arbiter.expectMsg(Join)
+    arbiter.send(secondary, JoinedSecondary)
+
+    (secondary, session(secondary))
+  }
+
+  class FlakyForwarder(targetProps: Props, name: String) extends Actor with ActorLogging {
+
+    val child = context.actorOf(targetProps, name)
+
+    var flipFlop = true
+
+    def receive = {
+
+      case msg if sender == child =>
+        context.parent forward msg
+
+      case msg: Snapshot =>
+        if (flipFlop) child forward msg
+        else log.debug(s"Dropping $msg")
+        flipFlop = !flipFlop
+
+      case msg =>
+        child forward msg
+    }
+  }
 
 }

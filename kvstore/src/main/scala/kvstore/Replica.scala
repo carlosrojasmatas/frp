@@ -18,6 +18,7 @@ import akka.pattern.pipe
 import akka.util.Timeout
 import kvstore.Arbiter._
 import com.sun.org.apache.xerces.internal.impl.dtd.models.CMAny
+import akka.actor.OneForOneStrategy
 
 object Replica {
   sealed trait Operation {
@@ -53,12 +54,12 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   var kv = Map.empty[String, String]
   var secondaries = Map.empty[ActorRef, ActorRef] //replicators map
   var consistency = Map.empty[String, ActorRef] //ConsistencyManagers. One per key.
-  var persister = context.actorOf(persistenceProps)
+  var persister = context.actorOf(persistenceProps,s"persister")
   var replicators = Set.empty[ActorRef]
 
   /*End of new variables*/
 
-  override val supervisorStrategy = AllForOneStrategy(10, 1 second) {
+  override val supervisorStrategy = OneForOneStrategy(10, 1 second) {
     case e: PersistenceException => {
       Resume
     }
@@ -99,11 +100,11 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
       removed.foreach { r =>
         {
           //go over all pendings acks and confirm them once
-
           consistency.foreach {
             case (key, mgr) => mgr ! ReplicaGone(secondaries(r))
           }
           secondaries(r) ! PoisonPill //stop the replicator
+          replicators -= secondaries(r)
           secondaries -= r //removed from reference
         }
       }
@@ -149,6 +150,9 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
 
   private def managerFor(key: String): ActorRef = {
     consistency.get(key) getOrElse {
+      if(replicators.size > 2){
+        replicators foreach (p  => p.path)
+      }
       val nc = context.actorOf(ConsistencyManager.props(replicators, persister), s"con-mgr-$key")
       consistency += (key -> nc)
       nc

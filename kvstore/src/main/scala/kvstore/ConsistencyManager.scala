@@ -40,7 +40,9 @@ class ConsistencyManager(var replicators: Set[ActorRef], persister: ActorRef) ex
       workingList = workingList.enqueue(e)
       context.become(next)
     case a: ReplicaAdded => replicators += a.rep
-    case a: ReplicaGone  => replicators -= a.rep
+    case a: ReplicaGone  => {
+    	replicators -= a.rep
+    }
   }
 
   def next: Receive = {
@@ -53,7 +55,7 @@ class ConsistencyManager(var replicators: Set[ActorRef], persister: ActorRef) ex
 
   def processing(e: Ensure): Receive = {
     persister ! Persist(e.key, e.value, e.id)
-    retries += context.system.scheduler.scheduleOnce(100 milliseconds, self, Retry)
+    retries += context.system.scheduler.scheduleOnce(150 milliseconds, self, Retry)
     timeouts += (e.key -> context.system.scheduler.scheduleOnce(1 second, self, Timeout))
     replicators foreach (_ ! Replicate(e.key, e.value, e.id))
     waitForConsistency(replicators, false, e)
@@ -75,6 +77,7 @@ class ConsistencyManager(var replicators: Set[ActorRef], persister: ActorRef) ex
       }
 
     case p @ Persisted(key, id) => {
+      retries foreach {_.cancel()}
       if (pendingReplicators.size == 0) {
         timeouts(key).cancel
         e.sender ! e.response()
